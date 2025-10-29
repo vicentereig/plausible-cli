@@ -24,8 +24,8 @@
   - `POST /api/v1/sites/{site_id}/reset-stats` → reset by date.
 
 ### Stats API
-- Endpoints: `aggregate`, `timeseries`, `breakdown`, `realtime/visitors`.
-- Query parameters allow filters (`filters=event:page==/docs`), metrics (`visitors`, `pageviews`), intervals (`period=custom&date=2024-01-01,2024-01-31`), sorting, and pagination.
+- Unified `POST /api/v2/query` endpoint powers `aggregate`, `timeseries`, `breakdown`, and realtime slices.
+- The client builds JSON payloads with metrics, dimensions, translated filters, order-by clauses, and limit/offset pagination (with include flags for totals).
 
 ### Events API
 - `POST /api/v1/events` for custom goals and retroactive imports.
@@ -55,9 +55,10 @@
 ### `plausible stats`
 - ✅ `aggregate` – returns KPI metrics; supports `--metric` repeatable flags.
 - ✅ `timeseries` – emits chronologically sorted rows; optional `--json` or `--csv`.
-- ✅ `breakdown` – slices by dimensions with pagination; handles `--dimension` values.
+- ✅ `breakdown` – slices by dimensions with pagination; handles property dimensions.
 - ✅ `realtime` – fetch visitors currently on site and prints visitors/pageviews/bounce rate.
-- Shared flags: `--site`, `--period|--date`, `--filters`, `--props`, `--format`.
+- Shared flags: `--site`, `--period|--date`, `--filters` (legacy syntax is auto-translated), `--metric`, `--output`.
+- Extras: `--properties` (timeseries/breakdown), `--limit/--page`, `--sort`. `--compare` remains unsupported on the v2 Stats API.
 
 ### `plausible events`
 - ✅ `send` – post events from CLI (`--data/--file/--stdin`) with optional domain override.

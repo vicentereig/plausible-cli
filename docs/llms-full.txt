@@ -59,21 +59,19 @@ Use `--account <alias>` on any downstream command to override the default.
   ```
 
 ### `plausible stats aggregate`
-- Wraps `GET /api/v1/stats/aggregate`.
+- Wraps `POST /api/v2/query` without dimensions and returns a metrics map.
 - Required flags:
   - `--site <site_id>`
 - Optional flags:
   - `--metric <metric>` (repeatable)
   - `--period <period>` (e.g., `7d`, `30d`, `month`, `custom`)
   - `--date <YYYY-MM-DD,YYYY-MM-DD>` (for custom periods)
-  - `--filters <filter>` (repeatable Plausible filter expressions)
-  - `--properties <prop>` (repeatable)
-  - `--compare <modifier>`
-  - `--interval <granularity>`
-  - `--sort <field>`
+  - `--filters <expression>` (repeatable; legacy operators such as `==`, `!=`, `=@`, `!@`, `=~`, `!~`, `=^`, `$=` are translated to Stats API filter tuples)
+  - `--sort <metric[:asc|desc]>`
   - `--limit <number>`
-  - `--page <number>`
-- JSON output matches the Plausible API response:
+  - `--page <number>` (requires `--limit`)
+- Not currently supported on the Stats API v2 path: `--properties`, `--compare`, `--interval`.
+- Example JSON output:
   ```jsonc
   {
     "results": {
@@ -84,15 +82,21 @@ Use `--account <alias>` on any downstream command to override the default.
   ```
 
 ### `plausible stats timeseries`
-- Returns chronologically ordered rows (respecting `--interval`).
-- Same flags as `aggregate`; output is an array of objects with keys like `date`, `visitors`, `pageviews`.
+- Queries `POST /api/v2/query` with a `time:*` dimension (default `time:day`) and returns chronologically ordered rows.
+- Optional flags mirror `aggregate` with additions:
+  - `--interval <minute|hour|day|week|month|year>` (selects the `time:*` bucket)
+  - `--properties <dimension>` (repeatable; appends extra dimensions to each row)
+- Output rows include a `time` field plus requested metrics; totals are sourced from the API's `metric_totals`.
 
 ### `plausible stats breakdown`
-- Breaks metrics by a property (`event:page`, `visit:source`, etc.).
-- Supports pagination via `--limit`/`--page` and sorting via `--sort <metric:direction>`.
+- Issues a Stats API v2 query with the requested property as the first dimension.
+- Supports pagination via `--limit`/`--page` (translated to `limit`/`offset`) and sorting via `--sort <metric:direction>`.
+- `--include` accepts comma-separated flags: `imports`, `time_labels`, `total_rows` (any other value is rejected).
+- Metrics totals and total row counts are surfaced when available.
 
 ### `plausible stats realtime`
-- Returns current visitor counts and optional metrics (`pageviews`, `bounce_rate`, `visit_duration`).
+- Executes a rolling five-minute Stats API v2 query to approximate the Realtime dashboard.
+- Returns current visitor counts and optional metrics (`pageviews`, `bounce_rate`, `visit_duration`). Bounce rate is normalised to `0-1` for display.
 - Requires `--site <site_id>`; output schema:
   ```jsonc
   {
