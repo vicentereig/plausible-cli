@@ -54,8 +54,15 @@ jobs:
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
+        if: ${{ secrets.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           flags: rust
           fail_ci_if_error: true
+
+      - name: Warn when Codecov token is missing
+        if: ${{ secrets.CODECOV_TOKEN == '' }}
+        run: |
+          echo "::warning title=Codecov upload skipped::Set the CODECOV_TOKEN repository secret to enable coverage uploads."

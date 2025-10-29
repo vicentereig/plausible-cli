@@ -152,6 +152,11 @@ LLM.
   brew install plausible
   ```
   The formula used by the tap lives in `homebrew/Formula/plausible.rb` and is updated automatically during the release workflow.
+  Until the dedicated tap repository is published, you can install the same formula locally:
+  ```bash
+  brew tap vicentereig/plausible-cli "$(pwd)/homebrew"
+  brew install plausible
+  ```
 
 ## Testing
 
