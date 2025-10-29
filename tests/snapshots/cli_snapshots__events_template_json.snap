@@ -1,0 +1,14 @@
+---
+source: tests/cli_snapshots.rs
+assertion_line: 78
+expression: output
+---
+{
+  "device_type": "desktop",
+  "domain": "example.com",
+  "name": "Signup",
+  "referrer": "https://google.com",
+  "url": "https://example.com/signup",
+  "utm_medium": "email",
+  "utm_source": "newsletter"
+}

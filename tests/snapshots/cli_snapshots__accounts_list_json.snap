@@ -1,0 +1,23 @@
+---
+source: tests/cli_snapshots.rs
+assertion_line: 56
+expression: output
+---
+[
+  {
+    "alias": "backup",
+    "daily_budget": 321,
+    "default": false,
+    "description": null,
+    "email": null,
+    "label": null
+  },
+  {
+    "alias": "primary",
+    "daily_budget": null,
+    "default": true,
+    "description": null,
+    "email": null,
+    "label": "Primary"
+  }
+]

@@ -1,0 +1,8 @@
+---
+source: tests/cli_snapshots.rs
+assertion_line: 25
+expression: output
+---
++-------+-------+-------+---------+--------------+
+| alias | label | email | default | daily_budget |
++-------+-------+-------+---------+--------------+
