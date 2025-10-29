@@ -1,5 +1,8 @@
 use crate::{
-    client::{AggregateQuery, AggregateResponse, SiteSummary},
+    client::{
+        AggregateQuery, AggregateResponse, BreakdownQuery, BreakdownResponse, SiteSummary,
+        TimeseriesQuery, TimeseriesResponse,
+    },
     rate_limit::{RateLimitError, RateLimiter, RateStatus},
 };
 use async_trait::async_trait;
@@ -27,6 +30,14 @@ impl JobRequest {
             JobKind::StatsAggregate { query } => {
                 format!("Aggregate stats for {} ({:?})", self.account, query.metrics)
             }
+            JobKind::StatsTimeseries { query } => format!(
+                "Timeseries stats for {} ({:?})",
+                self.account, query.metrics
+            ),
+            JobKind::StatsBreakdown { query } => format!(
+                "Breakdown stats for {} ({:?})",
+                self.account, query.metrics
+            ),
             JobKind::Custom { label } => label.clone(),
         }
     }
@@ -36,6 +47,8 @@ impl JobRequest {
 pub enum JobKind {
     ListSites,
     StatsAggregate { query: Box<AggregateQuery> },
+    StatsTimeseries { query: Box<TimeseriesQuery> },
+    StatsBreakdown { query: Box<BreakdownQuery> },
     Custom { label: String },
 }
 
@@ -43,6 +56,8 @@ pub enum JobKind {
 pub enum JobResponse {
     Sites(Vec<SiteSummary>),
     StatsAggregate(AggregateResponse),
+    StatsTimeseries(TimeseriesResponse),
+    StatsBreakdown(BreakdownResponse),
     Acknowledged,
     Custom(serde_json::Value),
 }

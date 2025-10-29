@@ -1,5 +1,8 @@
 use crate::{
-    client::{AggregateQuery, PlausibleClient, SiteSummary},
+    client::{
+        AggregateQuery, BreakdownQuery, BreakdownResponse, PlausibleClient, SiteSummary,
+        TimeseriesQuery, TimeseriesResponse,
+    },
     config::accounts::{
         AccountExport, AccountProfile, AccountRecord, AccountStore, AccountSummary,
     },
@@ -70,6 +73,10 @@ pub enum SitesCommand {
 pub enum StatsCommand {
     /// Run an aggregate stats query.
     Aggregate(StatsAggregateArgs),
+    /// Run a timeseries stats query.
+    Timeseries(StatsTimeseriesArgs),
+    /// Run a breakdown stats query.
+    Breakdown(StatsBreakdownArgs),
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -151,6 +158,83 @@ pub struct StatsAggregateArgs {
     pub page: Option<u32>,
 }
 
+#[derive(Args, Debug, Default, Clone)]
+pub struct StatsTimeseriesArgs {
+    /// Site domain or site_id to query.
+    #[arg(long)]
+    pub site: String,
+    /// Metrics to include (repeatable).
+    #[arg(long = "metric", short = 'm')]
+    pub metrics: Vec<String>,
+    /// Period string (e.g., 7d, 30d, month, custom).
+    #[arg(long)]
+    pub period: Option<String>,
+    /// Custom date range (YYYY-MM-DD,YYYY-MM-DD).
+    #[arg(long)]
+    pub date: Option<String>,
+    /// Filters to apply (repeatable, Plausible filter syntax).
+    #[arg(long)]
+    pub filters: Vec<String>,
+    /// Event properties to include (repeatable).
+    #[arg(long)]
+    pub properties: Vec<String>,
+    /// Compare parameter (e.g., previous_period).
+    #[arg(long)]
+    pub compare: Option<String>,
+    /// Interval parameter (e.g., date, week).
+    #[arg(long)]
+    pub interval: Option<String>,
+    /// Sort parameter for breakdowns.
+    #[arg(long)]
+    pub sort: Option<String>,
+    /// Limit number of rows returned.
+    #[arg(long)]
+    pub limit: Option<u32>,
+    /// Page number (for paginated queries).
+    #[arg(long)]
+    pub page: Option<u32>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct StatsBreakdownArgs {
+    /// Site domain or site_id to query.
+    #[arg(long)]
+    pub site: String,
+    /// Property to breakdown by (e.g., event:page, visit:source).
+    #[arg(long)]
+    pub property: String,
+    /// Metrics to include (repeatable).
+    #[arg(long = "metric", short = 'm')]
+    pub metrics: Vec<String>,
+    /// Period string (e.g., 7d, 30d, month, custom).
+    #[arg(long)]
+    pub period: Option<String>,
+    /// Custom date range (YYYY-MM-DD,YYYY-MM-DD).
+    #[arg(long)]
+    pub date: Option<String>,
+    /// Filters to apply (repeatable, Plausible filter syntax).
+    #[arg(long)]
+    pub filters: Vec<String>,
+    /// Event properties to include (repeatable).
+    #[arg(long)]
+    pub properties: Vec<String>,
+    /// Compare parameter (e.g., previous_period).
+    #[arg(long)]
+    pub compare: Option<String>,
+    /// Sort parameter for breakdowns.
+    #[arg(long)]
+    pub sort: Option<String>,
+    /// Limit number of rows returned.
+    #[arg(long)]
+    pub limit: Option<u32>,
+    /// Page number (for paginated queries).
+    #[arg(long)]
+    pub page: Option<u32>,
+    /// Include parameter (e.g., previous).
+    #[arg(long)]
+    pub include: Option<String>,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum, Default)]
 pub enum OutputFormat {
     #[default]
@@ -217,6 +301,46 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                 render_aggregate(&result, cli.output)?;
             }
         }
+        Commands::Stats {
+            command: StatsCommand::Timeseries(args),
+        } => {
+            let query = build_timeseries_query(args);
+            let ticket = queue
+                .submit(
+                    JobRequest {
+                        account: account_alias.clone(),
+                        kind: JobKind::StatsTimeseries {
+                            query: Box::new(query),
+                        },
+                    },
+                    NonZeroU32::new(1).unwrap(),
+                )
+                .await?;
+            let response = ticket.await_result().await?;
+            if let JobResponse::StatsTimeseries(result) = response {
+                render_timeseries(&result, cli.output)?;
+            }
+        }
+        Commands::Stats {
+            command: StatsCommand::Breakdown(args),
+        } => {
+            let query = build_breakdown_query(args);
+            let ticket = queue
+                .submit(
+                    JobRequest {
+                        account: account_alias.clone(),
+                        kind: JobKind::StatsBreakdown {
+                            query: Box::new(query),
+                        },
+                    },
+                    NonZeroU32::new(1).unwrap(),
+                )
+                .await?;
+            let response = ticket.await_result().await?;
+            if let JobResponse::StatsBreakdown(result) = response {
+                render_breakdown(&result, cli.output)?;
+            }
+        }
         Commands::Events {
             command: EventsCommand::Template,
         } => {
@@ -263,6 +387,39 @@ fn build_aggregate_query(args: &StatsAggregateArgs) -> AggregateQuery {
         sort: args.sort.clone(),
         limit: args.limit,
         page: args.page,
+    }
+}
+
+fn build_timeseries_query(args: &StatsTimeseriesArgs) -> TimeseriesQuery {
+    TimeseriesQuery {
+        site_id: args.site.clone(),
+        metrics: args.metrics.clone(),
+        period: args.period.clone(),
+        date: args.date.clone(),
+        interval: args.interval.clone(),
+        filters: args.filters.clone(),
+        properties: args.properties.clone(),
+        compare: args.compare.clone(),
+        sort: args.sort.clone(),
+        limit: args.limit,
+        page: args.page,
+    }
+}
+
+fn build_breakdown_query(args: &StatsBreakdownArgs) -> BreakdownQuery {
+    BreakdownQuery {
+        site_id: args.site.clone(),
+        property: args.property.clone(),
+        metrics: args.metrics.clone(),
+        period: args.period.clone(),
+        date: args.date.clone(),
+        filters: args.filters.clone(),
+        properties: args.properties.clone(),
+        compare: args.compare.clone(),
+        sort: args.sort.clone(),
+        limit: args.limit,
+        page: args.page,
+        include: args.include.clone(),
     }
 }
 
@@ -344,6 +501,66 @@ fn render_aggregate(
             }
             let table = Table::new(rows).to_string();
             println!("{}", table);
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+    }
+    Ok(())
+}
+
+fn render_timeseries(
+    response: &TimeseriesResponse,
+    format: OutputFormat,
+) -> Result<(), Error> {
+    match format {
+        OutputFormat::Human => {
+            let rows: Vec<_> = response.results.iter().map(TimeseriesRow::from).collect();
+            if rows.is_empty() {
+                println!("No timeseries data.");
+            } else {
+                let table = Table::new(rows).to_string();
+                println!("{}", table);
+            }
+            if !response.totals.is_empty() {
+                println!(
+                    "Totals: {}",
+                    format_metrics(&response.totals, &[])
+                );
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+    }
+    Ok(())
+}
+
+fn render_breakdown(
+    response: &BreakdownResponse,
+    format: OutputFormat,
+) -> Result<(), Error> {
+    match format {
+        OutputFormat::Human => {
+            let rows: Vec<_> = response.results.iter().map(BreakdownRow::from).collect();
+            if let Some(page) = response.page {
+                if let Some(total) = response.total_pages {
+                    println!("Page {}/{}", page, total);
+                } else {
+                    println!("Page {}", page);
+                }
+            }
+            if rows.is_empty() {
+                println!("No breakdown data.");
+            } else {
+                let table = Table::new(rows).to_string();
+                println!("{}", table);
+            }
+            if let Some(totals) = &response.totals {
+                if !totals.is_empty() {
+                    println!("Totals: {}", format_metrics(totals, &[]));
+                }
+            }
         }
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&response)?);
@@ -483,6 +700,64 @@ struct MetricRow {
 }
 
 #[derive(Tabled)]
+struct TimeseriesRow {
+    timestamp: String,
+    metrics: String,
+}
+
+impl From<&serde_json::Map<String, serde_json::Value>> for TimeseriesRow {
+    fn from(entry: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let timestamp = entry
+            .get("datetime")
+            .or_else(|| entry.get("date"))
+            .or_else(|| entry.get("time"))
+            .map(format_value)
+            .unwrap_or_else(|| "n/a".into());
+        let metrics = format_metrics(entry, &["datetime", "date", "time"]);
+        Self { timestamp, metrics }
+    }
+}
+
+#[derive(Tabled)]
+struct BreakdownRow {
+    segment: String,
+    metrics: String,
+}
+
+impl From<&serde_json::Map<String, serde_json::Value>> for BreakdownRow {
+    fn from(entry: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let segment = entry
+            .get("value")
+            .or_else(|| entry.get("name"))
+            .map(format_value)
+            .unwrap_or_else(|| "n/a".into());
+        let metrics = format_metrics(entry, &["value", "name"]);
+        Self { segment, metrics }
+    }
+}
+
+fn format_metrics(
+    map: &serde_json::Map<String, serde_json::Value>,
+    skip: &[&str],
+) -> String {
+    map.iter()
+        .filter(|(key, _)| !skip.iter().any(|skip_key| *skip_key == key.as_str()))
+        .map(|(key, value)| format!("{key}={}", format_value(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".into(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| "<unserializable>".into()),
+    }
+}
+
+#[derive(Tabled)]
 struct AccountRow {
     alias: String,
     label: String,
@@ -548,6 +823,62 @@ impl PlausibleExecutor {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeseries_builder_copies_fields() {
+        let args = StatsTimeseriesArgs {
+            site: "example.com".into(),
+            metrics: vec!["visitors".into()],
+            period: Some("7d".into()),
+            date: Some("2024-01-01,2024-01-07".into()),
+            filters: vec!["event:page==/docs".into()],
+            properties: vec!["visit:source".into()],
+            compare: Some("previous_period".into()),
+            interval: Some("date".into()),
+            sort: Some("visitors:desc".into()),
+            limit: Some(10),
+            page: Some(2),
+        };
+
+        let query = build_timeseries_query(&args);
+        assert_eq!(query.site_id, "example.com");
+        assert_eq!(query.metrics, vec!["visitors"]);
+        assert_eq!(query.period.as_deref(), Some("7d"));
+        assert_eq!(query.interval.as_deref(), Some("date"));
+        assert_eq!(query.limit, Some(10));
+        assert_eq!(query.page, Some(2));
+        assert_eq!(query.filters, vec!["event:page==/docs"]);
+        assert_eq!(query.properties, vec!["visit:source"]);
+    }
+
+    #[test]
+    fn breakdown_builder_includes_property_and_include() {
+        let args = StatsBreakdownArgs {
+            site: "example.com".into(),
+            property: "event:page".into(),
+            metrics: vec!["visitors".into(), "pageviews".into()],
+            period: Some("30d".into()),
+            date: None,
+            filters: vec![],
+            properties: vec![],
+            compare: Some("previous_period".into()),
+            sort: Some("visitors:desc".into()),
+            limit: Some(25),
+            page: Some(1),
+            include: Some("previous".into()),
+        };
+
+        let query = build_breakdown_query(&args);
+        assert_eq!(query.property, "event:page");
+        assert_eq!(query.metrics, vec!["visitors", "pageviews"]);
+        assert_eq!(query.include.as_deref(), Some("previous"));
+        assert_eq!(query.limit, Some(25));
+    }
+}
+
 #[async_trait]
 impl crate::queue::JobExecutor for PlausibleExecutor {
     async fn execute(&self, request: JobRequest) -> crate::queue::JobResult {
@@ -567,6 +898,22 @@ impl crate::queue::JobExecutor for PlausibleExecutor {
                     .await
                     .map_err(|err| WorkerError::Execution(err.to_string()))?;
                 Ok(JobResponse::StatsAggregate(result))
+            }
+            JobKind::StatsTimeseries { query } => {
+                let result = self
+                    .client
+                    .stats_timeseries(&query)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsTimeseries(result))
+            }
+            JobKind::StatsBreakdown { query } => {
+                let result = self
+                    .client
+                    .stats_breakdown(&query)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsBreakdown(result))
             }
             JobKind::Custom { .. } => Ok(JobResponse::Acknowledged),
         }
