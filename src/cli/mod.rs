@@ -7,7 +7,9 @@ use crate::{
     config::accounts::{
         AccountExport, AccountProfile, AccountRecord, AccountStore, AccountSummary,
     },
-    queue::{JobKind, JobRequest, JobResponse, QueueJobState, QueueSnapshot, Worker, WorkerError},
+    queue::{
+        self, JobKind, JobRequest, JobResponse, QueueJobState, QueueSnapshot, Worker, WorkerError,
+    },
     rate_limit::{RateLimitConfig, RateLimiter},
     Error,
 };
@@ -405,6 +407,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                         JobRequest {
                             account: account_alias.clone(),
                             kind: JobKind::ListSites,
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -423,6 +426,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                             kind: JobKind::SiteCreate {
                                 request: Box::new(request),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -442,6 +446,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                                 site_id,
                                 request: Box::new(request),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -461,6 +466,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                                 site_id,
                                 request: Box::new(request),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -481,6 +487,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                                 kind: JobKind::SiteDelete {
                                     site_id: args.site.clone(),
                                 },
+                                max_retries: queue::DEFAULT_MAX_RETRIES,
                             },
                             NonZeroU32::new(1).unwrap(),
                         )
@@ -505,6 +512,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                             kind: JobKind::StatsAggregate {
                                 query: Box::new(query),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -523,6 +531,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                             kind: JobKind::StatsTimeseries {
                                 query: Box::new(query),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -541,6 +550,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                             kind: JobKind::StatsBreakdown {
                                 query: Box::new(query),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -558,6 +568,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                             kind: JobKind::StatsRealtime {
                                 site_id: args.site.clone(),
                             },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -579,6 +590,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                         JobRequest {
                             account: account_alias.clone(),
                             kind: JobKind::EventSend { event },
+                            max_retries: queue::DEFAULT_MAX_RETRIES,
                         },
                         NonZeroU32::new(1).unwrap(),
                     )
@@ -625,6 +637,7 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                             JobRequest {
                                 account: account_alias.clone(),
                                 kind: JobKind::EventsImport { events },
+                                max_retries: queue::DEFAULT_MAX_RETRIES,
                             },
                             NonZeroU32::new(weight_u32).unwrap(),
                         )
@@ -1084,6 +1097,10 @@ fn render_queue_snapshot(snapshot: &[QueueSnapshot], format: OutputFormat) -> Re
                         },
                         "enqueued_at": format_timestamp(&entry.enqueued_at),
                         "started_at": entry.started_at.as_ref().map(format_timestamp),
+                        "attempt": entry.attempt,
+                        "max_retries": entry.max_retries,
+                        "next_retry_at": entry.next_retry_at.as_ref().map(format_timestamp),
+                        "last_error": entry.last_error,
                     })
                 })
                 .collect();
@@ -1277,10 +1294,14 @@ struct QueueRow {
     state: String,
     enqueued_at: String,
     started_at: String,
+    attempt: String,
+    next_retry_at: String,
+    last_error: String,
 }
 
 impl From<&QueueSnapshot> for QueueRow {
     fn from(entry: &QueueSnapshot) -> Self {
+        let attempt_display = format!("{}/{}", entry.attempt, entry.max_retries);
         Self {
             id: entry.id,
             account: entry.account.clone(),
@@ -1295,6 +1316,13 @@ impl From<&QueueSnapshot> for QueueRow {
                 .as_ref()
                 .map(format_timestamp)
                 .unwrap_or_else(|| "n/a".into()),
+            attempt: attempt_display,
+            next_retry_at: entry
+                .next_retry_at
+                .as_ref()
+                .map(format_timestamp)
+                .unwrap_or_else(|| "n/a".into()),
+            last_error: entry.last_error.clone().unwrap_or_else(|| "".into()),
         }
     }
 }

@@ -10,10 +10,15 @@ use async_trait::async_trait;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use time::OffsetDateTime;
+use std::time::Duration as StdDuration;
+use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify};
+use tokio::time::sleep;
 
 const DEFAULT_QUEUE_CAPACITY: usize = 128;
+pub const DEFAULT_MAX_RETRIES: u32 = 3;
+const DEFAULT_RETRY_BASE_MS: u64 = 1_000;
+const MAX_RETRY_DELAY_MS: u64 = 30_000;
 
 pub type JobId = u64;
 pub type JobResult = Result<JobResponse, WorkerError>;
@@ -22,6 +27,7 @@ pub type JobResult = Result<JobResponse, WorkerError>;
 pub struct JobRequest {
     pub account: String,
     pub kind: JobKind,
+    pub max_retries: u32,
 }
 
 impl JobRequest {
@@ -125,6 +131,10 @@ pub struct QueueSnapshot {
     pub state: QueueJobState,
     pub enqueued_at: OffsetDateTime,
     pub started_at: Option<OffsetDateTime>,
+    pub attempt: u32,
+    pub max_retries: u32,
+    pub last_error: Option<String>,
+    pub next_retry_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +150,10 @@ struct JobStateEntry {
     description: String,
     enqueued_at: OffsetDateTime,
     started_at: Option<OffsetDateTime>,
+    attempt: u32,
+    max_retries: u32,
+    last_error: Option<String>,
+    next_retry_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +164,10 @@ pub struct TelemetryEvent {
     pub kind: TelemetryKind,
     pub timestamp: OffsetDateTime,
     pub status: Option<RateStatus>,
+    pub attempt: u32,
+    pub max_retries: u32,
+    pub error: Option<String>,
+    pub next_retry_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +204,8 @@ impl QueueHandle {
             weight,
             responder: Some(tx),
             enqueued_at,
+            attempt: 0,
+            max_retries: request.max_retries,
         };
         {
             let mut state = self.state.lock().await;
@@ -195,6 +215,10 @@ impl QueueHandle {
                 description: description.clone(),
                 enqueued_at,
                 started_at: None,
+                attempt: 0,
+                max_retries: request.max_retries,
+                last_error: None,
+                next_retry_at: None,
             });
         }
         self.telemetry
@@ -205,6 +229,10 @@ impl QueueHandle {
                 kind: TelemetryKind::Enqueued,
                 timestamp: message.enqueued_at,
                 status: None,
+                attempt: 0,
+                max_retries: request.max_retries,
+                error: None,
+                next_retry_at: None,
             })
             .ok();
         if self.sender.send(message).await.is_err() {
@@ -237,6 +265,10 @@ impl QueueHandle {
                 },
                 enqueued_at: entry.enqueued_at,
                 started_at: entry.started_at,
+                attempt: entry.attempt,
+                max_retries: entry.max_retries,
+                last_error: entry.last_error.clone(),
+                next_retry_at: entry.next_retry_at,
             })
             .collect()
     }
@@ -281,6 +313,8 @@ struct JobMessage {
     weight: NonZeroU32,
     responder: Option<oneshot::Sender<JobResult>>,
     enqueued_at: OffsetDateTime,
+    attempt: u32,
+    max_retries: u32,
 }
 
 #[async_trait]
@@ -290,6 +324,7 @@ pub trait JobExecutor: Send + Sync + 'static {
 
 pub struct Worker<E: JobExecutor> {
     queue: mpsc::Receiver<JobMessage>,
+    sender: mpsc::Sender<JobMessage>,
     telemetry: broadcast::Sender<TelemetryEvent>,
     executor: Arc<E>,
     rate_limiter: RateLimiter,
@@ -309,6 +344,7 @@ impl<E: JobExecutor> Worker<E> {
         let idle_notify = Arc::new(Notify::new());
         let worker = Self {
             queue: rx,
+            sender: tx.clone(),
             telemetry: telemetry_tx.clone(),
             executor,
             rate_limiter: rate_limiter.clone(),
@@ -326,72 +362,120 @@ impl<E: JobExecutor> Worker<E> {
     }
 
     async fn run(mut self) {
-        while let Some(message) = self.queue.recv().await {
-            let JobMessage {
-                id,
-                request,
-                weight,
-                responder,
-                ..
-            } = message;
+        while let Some(mut message) = self.queue.recv().await {
+            let id = message.id;
+            let attempt_number = message.attempt + 1;
+            let max_retries = message.max_retries;
+            let description = message.request.description();
+            let account = message.request.account.clone();
+            let weight = message.weight;
+
             let start = OffsetDateTime::now_utc();
+            self.update_state_on_start(id, start, attempt_number).await;
             self.telemetry
                 .send(TelemetryEvent {
                     job_id: id,
-                    account: request.account.clone(),
-                    description: request.description(),
+                    account: account.clone(),
+                    description: description.clone(),
                     kind: TelemetryKind::Started,
                     timestamp: start,
                     status: None,
+                    attempt: attempt_number,
+                    max_retries,
+                    error: None,
+                    next_retry_at: None,
                 })
                 .ok();
-            {
-                let mut state = self.state.lock().await;
-                if let Some(entry) = state.iter_mut().find(|entry| entry.id == id) {
-                    entry.started_at = Some(start);
-                }
-            }
 
             self.rate_limiter.acquire(weight).await;
-            let result = self.executor.execute(request.clone()).await;
+            let result = self.executor.execute(message.request.clone()).await;
 
             match result {
                 Ok(response) => {
                     let status = self
                         .rate_limiter
                         .record_success(weight.get(), OffsetDateTime::now_utc())
-                        .await;
-                    let status = status.ok();
+                        .await
+                        .ok();
                     self.telemetry
                         .send(TelemetryEvent {
                             job_id: id,
-                            account: request.account.clone(),
-                            description: request.description(),
+                            account: account.clone(),
+                            description: description.clone(),
                             kind: TelemetryKind::Succeeded,
                             timestamp: OffsetDateTime::now_utc(),
                             status,
+                            attempt: attempt_number,
+                            max_retries,
+                            error: None,
+                            next_retry_at: None,
                         })
                         .ok();
-                    if let Some(tx) = responder {
+                    if let Some(tx) = message.responder.take() {
                         let _ = tx.send(Ok(response));
                     }
                     self.finish_job(id).await;
                 }
                 Err(err) => {
-                    self.telemetry
-                        .send(TelemetryEvent {
-                            job_id: id,
-                            account: request.account.clone(),
-                            description: request.description(),
-                            kind: TelemetryKind::Failed,
-                            timestamp: OffsetDateTime::now_utc(),
-                            status: None,
-                        })
-                        .ok();
-                    if let Some(tx) = responder {
-                        let _ = tx.send(Err(err));
+                    let error_msg = err.to_string();
+                    let now = OffsetDateTime::now_utc();
+                    let next_attempt = message.attempt + 1;
+                    if next_attempt > max_retries {
+                        self.telemetry
+                            .send(TelemetryEvent {
+                                job_id: id,
+                                account: account.clone(),
+                                description: description.clone(),
+                                kind: TelemetryKind::Failed,
+                                timestamp: now,
+                                status: None,
+                                attempt: attempt_number,
+                                max_retries,
+                                error: Some(error_msg.clone()),
+                                next_retry_at: None,
+                            })
+                            .ok();
+                        if let Some(tx) = message.responder.take() {
+                            let _ = tx.send(Err(err));
+                        }
+                        self.finish_job(id).await;
+                    } else {
+                        let delay = retry_delay(attempt_number);
+                        let next_retry_at = now.checked_add(to_time_duration(delay));
+                        self.update_state_on_retry(
+                            id,
+                            next_attempt,
+                            max_retries,
+                            error_msg.clone(),
+                            next_retry_at,
+                        )
+                        .await;
+                        self.telemetry
+                            .send(TelemetryEvent {
+                                job_id: id,
+                                account: account.clone(),
+                                description: description.clone(),
+                                kind: TelemetryKind::Failed,
+                                timestamp: now,
+                                status: None,
+                                attempt: attempt_number,
+                                max_retries,
+                                error: Some(error_msg.clone()),
+                                next_retry_at,
+                            })
+                            .ok();
+                        message.attempt += 1;
+                        let sender = self.sender.clone();
+                        tokio::spawn(async move {
+                            sleep(delay).await;
+                            if let Err(err) = sender.send(message).await {
+                                let mut failed_message = err.0;
+                                if let Some(tx) = failed_message.responder.take() {
+                                    let _ = tx.send(Err(WorkerError::QueueClosed));
+                                }
+                            }
+                        });
                     }
-                    self.finish_job(id).await;
                 }
             }
         }
@@ -403,6 +487,52 @@ impl<E: JobExecutor> Worker<E> {
         if state.is_empty() {
             self.idle_notify.notify_waiters();
         }
+    }
+
+    async fn update_state_on_start(&self, id: JobId, started: OffsetDateTime, attempt: u32) {
+        let mut state = self.state.lock().await;
+        if let Some(entry) = state.iter_mut().find(|entry| entry.id == id) {
+            entry.started_at = Some(started);
+            entry.attempt = attempt;
+            entry.last_error = None;
+            entry.next_retry_at = None;
+        }
+    }
+
+    async fn update_state_on_retry(
+        &self,
+        id: JobId,
+        attempt: u32,
+        max_retries: u32,
+        error: String,
+        next_retry_at: Option<OffsetDateTime>,
+    ) {
+        let mut state = self.state.lock().await;
+        if let Some(entry) = state.iter_mut().find(|entry| entry.id == id) {
+            entry.started_at = None;
+            entry.attempt = attempt;
+            entry.max_retries = max_retries;
+            entry.last_error = Some(error);
+            entry.next_retry_at = next_retry_at;
+        }
+    }
+}
+
+fn retry_delay(attempt_number: u32) -> StdDuration {
+    let exponent = attempt_number.saturating_sub(1).min(8);
+    let factor = 1u64 << exponent;
+    let millis = DEFAULT_RETRY_BASE_MS
+        .saturating_mul(factor)
+        .min(MAX_RETRY_DELAY_MS);
+    StdDuration::from_millis(millis)
+}
+
+fn to_time_duration(delay: StdDuration) -> TimeDuration {
+    let millis = delay.as_millis();
+    if millis > i64::MAX as u128 {
+        TimeDuration::milliseconds(i64::MAX)
+    } else {
+        TimeDuration::milliseconds(millis as i64)
     }
 }
 
@@ -487,6 +617,24 @@ mod tests {
         }
     }
 
+    struct RetryingExecutor {
+        fail_until: usize,
+        calls: StdMutex<usize>,
+    }
+
+    #[async_trait]
+    impl JobExecutor for RetryingExecutor {
+        async fn execute(&self, _request: JobRequest) -> JobResult {
+            let mut guard = self.calls.lock().unwrap();
+            if *guard < self.fail_until {
+                *guard += 1;
+                Err(WorkerError::Execution("forced failure".into()))
+            } else {
+                Ok(JobResponse::Acknowledged)
+            }
+        }
+    }
+
     #[tokio::test]
     async fn worker_processes_jobs_and_respects_order() {
         let executor = Arc::new(TestExecutor {
@@ -501,6 +649,7 @@ mod tests {
             kind: JobKind::Custom {
                 label: "custom".into(),
             },
+            max_retries: 0,
         };
         let ticket = handle
             .submit(request, NonZeroU32::new(1).unwrap())
@@ -523,6 +672,7 @@ mod tests {
         let request = JobRequest {
             account: "acct".into(),
             kind: JobKind::ListSites,
+            max_retries: 0,
         };
         let ticket = handle
             .submit(request, NonZeroU32::new(1).unwrap())
@@ -551,6 +701,7 @@ mod tests {
                     kind: JobKind::Custom {
                         label: "blocking".into(),
                     },
+                    max_retries: 0,
                 },
                 NonZeroU32::new(1).unwrap(),
             )
@@ -568,5 +719,62 @@ mod tests {
         ticket.await_result().await.expect("result");
         handle.wait_idle().await;
         assert!(handle.snapshot().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retries_until_success() {
+        let executor = Arc::new(RetryingExecutor {
+            fail_until: 1,
+            calls: StdMutex::new(0),
+        });
+        let rate_limiter = setup_rate_limiter().await;
+        let handle = Worker::spawn(executor.clone(), rate_limiter, Some(4));
+
+        let ticket = handle
+            .submit(
+                JobRequest {
+                    account: "acct".into(),
+                    kind: JobKind::Custom {
+                        label: "retry".into(),
+                    },
+                    max_retries: 3,
+                },
+                NonZeroU32::new(1).unwrap(),
+            )
+            .await
+            .expect("enqueue");
+
+        let result = ticket.await_result().await;
+        assert!(result.is_ok());
+        handle.wait_idle().await;
+        assert_eq!(*executor.calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn returns_error_after_max_retries() {
+        let executor = Arc::new(RetryingExecutor {
+            fail_until: 10,
+            calls: StdMutex::new(0),
+        });
+        let rate_limiter = setup_rate_limiter().await;
+        let handle = Worker::spawn(executor, rate_limiter, Some(4));
+
+        let ticket = handle
+            .submit(
+                JobRequest {
+                    account: "acct".into(),
+                    kind: JobKind::Custom {
+                        label: "retry-fail".into(),
+                    },
+                    max_retries: 1,
+                },
+                NonZeroU32::new(1).unwrap(),
+            )
+            .await
+            .expect("enqueue");
+
+        let result = ticket.await_result().await;
+        assert!(matches!(result, Err(WorkerError::Execution(_))));
+        handle.wait_idle().await;
     }
 }
