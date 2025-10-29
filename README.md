@@ -3,6 +3,10 @@
 A Rust-native command-line interface that surfaces the Plausible Analytics APIs
 with a workflow tailored for humans and automation agents.
 
+> :memo: **Primary documentation lives in [`docs/llms-full.txt`](docs/llms-full.txt).**
+> It is authored in GitHub Flavored Markdown for LLMs and humans alike, and
+> covers setup, command schemas, prompt snippets, and safety guidance.
+
 ## Requirements
 
 - Rust 1.90 or newer (`rustup install stable` recommended).
