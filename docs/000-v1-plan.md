@@ -3,6 +3,13 @@
 ## Vision
 Deliver an ergonomic CLI that surfaces Plausible Analytics capabilities to humans and LLMs, while respecting rate limits, juggling multiple accounts, and enabling queued API execution.
 
+## Current Status — 2025-10-29
+- ✅ Foundations in place: repo scaffolding, account store (file-backed), Plausible client (sites + stats aggregate), rate limiter scaffold, queue/worker, baseline CLI commands (`status`, `sites list`, `stats aggregate`, `events template`, `accounts` CRUD), docs/LLM artefacts, CI wiring (latest on `main` @ a38358b).
+- ⏳ Features to extend: events `send/import`, stats `timeseries` & `breakdown`, queue `inspect/drain`, additional Plausible endpoint coverage (sites CRUD, events POST), daily budget configurability, secure keyring fallback.
+- 🔬 Test gaps: integration coverage via `assert_cmd`, expanded HTTP mocks (sites CRUD, events POST), JSON snapshot assertions, rate-limit exhaustion/backpressure scenarios.
+- 🚀 Distribution polish pending: GitHub release workflow, `cargo install` docs, Homebrew tap automation, tagged release + changelog.
+- 🧭 Next sprint focus: close remaining CLI surface + persistence polish, then broaden tests before first public release.
+
 ## Release Scope
 - Sites, Stats, Events API coverage.
 - Multi-account storage with secure API key handling.
@@ -25,15 +32,18 @@ gantt
     Repo scaffolding & tooling       :done,    f1, 2025-10-29, 1d
     Config & secrets infra           :active,  f2, 2025-10-30, 2d
     section Core Capabilities
-    Plausible client implementation  :f3,     after f2, 4d
-    Rate limiter + usage tracker     :f4,     after f3, 3d
-    Queue & worker runtime           :f5,     after f4, 3d
+    Plausible client implementation  :active, f3, 2025-10-31, 4d
+    Rate limiter + usage tracker     :done,   f4, 2025-11-02, 2d
+    Queue & worker runtime           :done,   f5, 2025-11-03, 2d
     section CLI Surface
-    Command wiring + help system     :f6,     after f4, 4d
-    Status command                   :f7,     after f5, 2d
+    Command wiring + help system     :active, f6, 2025-11-04, 4d
+    Status command                   :done,   f7, 2025-11-05, 1d
+    Stats extended endpoints         :crit,   f11, after f6, 3d
+    Events workflows                 :crit,   f12, after f6, 3d
+    Queue management commands        :crit,   f13, after f6, 2d
     section QA & Docs
     Integration tests                :f8,     after f6, 3d
-    Docs & LLM guide                 :f9,     after f6, 2d
+    Docs & LLM guide                 :done,   f9, 2025-11-06, 1d
     Release prep                     :f10,    after f8, 1d
 ```
 
@@ -59,38 +69,38 @@ gantt
 - Tests: use `wiremock` to assert request paths, headers (`Authorization: Bearer`), query params, retries on 429.
 
 ### 4. Rate Limiter & Usage Ledger
-- Implement hourly token bucket using `governor`.
-- Add configurable daily budget with persistent ledger (JSON or `sled`).
-- Provide metrics: remaining hourly/daily, last reset times.
-- Tests: simulate rapid enqueues to confirm blocking/backoff, ledger reset at midnight.
+- ✅ Implement hourly token bucket using `governor`.
+- ⏳ Add configurable daily budget with persistent ledger (JSON or `sled`).
+- ✅ Provide metrics: remaining hourly/daily, last reset times.
+- ✅ Tests: simulate rapid enqueues to confirm blocking/backoff, ledger reset at midnight (add coverage for daily overrides once implemented).
 
 ### 5. Intent Queue & Worker Runtime
-- Define `Intent` enum per command.
-- Foreground enqueues intents; background worker processes sequentially.
-- Telemetry channel for progress updates.
-- Handle retries, exponential backoff, cancellation on shutdown.
-- Tests: concurrency under load, ensures queue drains, error propagation.
+- ✅ Define `Intent` enum per command.
+- ✅ Foreground enqueues intents; background worker processes sequentially.
+- ✅ Telemetry channel for progress updates.
+- ⏳ Handle retries, exponential backoff, cancellation on shutdown.
+- ⏳ Tests: concurrency under load, ensures queue drains, error propagation.
 
 ### 6. CLI Commands & Output
-- Sites (`list/create/update/reset/delete`).
-- Stats (`aggregate/timeseries/breakdown/realtime`) with shared flags.
-- Events (`send/import/template`).
-- Queue (`inspect/drain`).
-- Status (reports account, limits, queue stats, API health).
-- Formatters: tables (human), JSON (machine).
-- Snapshot tests with `insta` or `similar`.
+- ✅ Sites `list`; ⏳ `create/update/reset/delete`.
+- ✅ Stats `aggregate`; ⏳ `timeseries/breakdown/realtime` with shared flags.
+- ✅ Events `template`; ⏳ `send/import`.
+- ⏳ Queue `inspect/drain`.
+- ✅ Status (reports account, limits, queue stats, API health).
+- ✅ Formatters: tables (human), JSON (machine).
+- ⏳ Snapshot tests with `insta` or `similar`.
 
 ### 7. Documentation & Help System
-- README + `llms-full.txt` generated from doc templates.
-- Command help auto-generated plus curated examples.
-- `plausible prompt examples --llm` to export LLM-ready instructions.
-- Ensure `--examples` and `--json-schema` subcommands deliver up-to-date docs.
+- ✅ README + `llms-full.txt` generated from doc templates (manual sync script pending).
+- ⏳ Command help auto-generated plus curated examples.
+- ⏳ `plausible prompt examples --llm` to export LLM-ready instructions.
+- ⏳ Ensure `--examples` and `--json-schema` subcommands deliver up-to-date docs.
 
 ### 8. QA & Release
-- Integration tests hitting Plausible sandbox via mocked responses.
-- Smoke tests with real API key (manual pre-release checklist).
-- Version tagging scheme (SemVer) and release notes template.
-- Packaging: `cargo install`, GitHub release, optional Homebrew tap.
+- ⏳ Integration tests hitting Plausible sandbox via mocked responses.
+- ⏳ Smoke tests with real API key (manual pre-release checklist).
+- ⏳ Version tagging scheme (SemVer) and release notes template.
+- ⏳ Packaging: `cargo install`, GitHub release, optional Homebrew tap.
 
 ## Design Patterns & Conventions
 - Command Pattern: CLI commands convert to `Intent` jobs.
@@ -131,7 +141,25 @@ gantt
 - Need for plugin hooks before v1?
 
 ## Definition of Done
-- CI pipeline green (lint, fmt, tests, deny).
-- README + `llms-full.txt` merged and validated.
-- Tagged release candidate with changelog summarizing features.
-- Post-release checklist: publish crate or instructions, Homebrew tap update.
+- ✅ CI pipeline green (lint, fmt, tests, deny).
+- ✅ README + `llms-full.txt` merged and validated.
+- ⏳ Tagged release candidate with changelog summarizing features.
+- ⏳ Post-release checklist: publish crate or instructions, Homebrew tap update.
+
+## Next Implementation Priorities (TDD-First)
+1. **Stats timeseries/breakdown**  
+   - Red tests: extend `client` module mocks to capture new endpoints, add CLI integration snapshots (human + JSON).  
+   - Green: implement API calls, queue intents, CLI wiring, output rendering, ensure rate-limit weights captured.
+2. **Events send/import workflows**  
+   - Red tests: event payload validation unit tests, CLI integration for `send` (stdin + flags) and `import` (NDJSON reader with `--dry-run`), worker interactions verifying queue submission.  
+   - Green: implement request builders, streaming uploads, background processing, success/failure telemetry.  
+   - Refactor: share schema templates between docs and runtime.
+3. **Queue management commands**  
+   - Red tests: queue inspection snapshots demonstrating ordering, drain command ensuring telemetry updates.  
+   - Green: introspection APIs on queue, CLI commands, optional `--json`.
+4. **Rate limit daily budget & keyring integration**  
+   - Red tests: ledger persistence with configurable daily caps, platform keyring mock verifying fallback logic.  
+   - Green: configuration plumbing, CLI flags/environment overrides, migration script for existing users.
+5. **Distribution pipeline**  
+   - Red tests: check GitHub workflow via `cargo xtask` smoke (or script).  
+   - Green: publish workflow, Homebrew tap formula generation, README install section refinements.

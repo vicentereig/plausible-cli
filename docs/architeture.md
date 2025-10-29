@@ -6,6 +6,11 @@
 - Support queued API execution with a background worker to smooth bursty usage.
 - Expose machine-readable JSON outputs and human-readable table narratives.
 
+## Status Snapshot — 2025-10-29
+- ✅ Implemented: account store (file-backed) with CRUD, Plausible client (sites list, stats aggregate), rate limiter with hourly ledger, queue + telemetry, baseline CLI commands (`status`, `sites list`, `stats aggregate`, `events template`, `accounts` subcommands), documentation set, CI pipeline.
+- ⏳ In progress: extend Plausible client (stats `timeseries/breakdown`, sites CRUD, events POST), enrich queue commands, implement events workflows, add integration tests & snapshot coverage, support daily budget overrides and secure keyring/OS credential fallback.
+- 🚀 Pending release tasks: distribution automation (GitHub releases, Homebrew tap), versioning, `plausible doctor`, TDD expansion before v1 tag.
+
 ## API Surface Summary
 
 ### Authentication
@@ -40,27 +45,27 @@
 - `export` – print machine-readable account metadata sans secrets for automation.
 
 ### `plausible sites`
-- `list` – summarize domains, visibility status, timezone.
-- `create` – accept domain, timezone, optional public flag.
-- `update` – patch properties via key-value flags.
-- `reset` – trigger stats reset with date range confirmation.
-- `delete` – queued destructive call requiring confirmation.
+- ✅ `list` – summarizes domains, visibility status, timezone (wired through queue + Plausible client).
+- ⏳ `create` – accept domain, timezone, optional public flag.
+- ⏳ `update` – patch properties via key-value flags.
+- ⏳ `reset` – trigger stats reset with date range confirmation.
+- ⏳ `delete` – queued destructive call requiring confirmation.
 
 ### `plausible stats`
-- `aggregate` – returns KPI metrics; supports `--metric` repeatable flags.
-- `timeseries` – emits chronologically sorted rows; optional `--json` or `--csv`.
-- `breakdown` – slices by dimensions with pagination; handles `--dimension` values.
-- `realtime` – fetch visitors currently on site.
+- ✅ `aggregate` – returns KPI metrics; supports `--metric` repeatable flags.
+- ⏳ `timeseries` – emits chronologically sorted rows; optional `--json` or `--csv`.
+- ⏳ `breakdown` – slices by dimensions with pagination; handles `--dimension` values.
+- ⏳ `realtime` – fetch visitors currently on site.
 - Shared flags: `--site`, `--period|--date`, `--filters`, `--props`, `--format`.
 
 ### `plausible events`
-- `send` – post events from CLI or piped JSON.
-- `import` – batch read newline-delimited events with optional `--dry-run`.
-- `template` – print example payload for copy/paste or LLM usage.
+- ⏳ `send` – post events from CLI or piped JSON.
+- ⏳ `import` – batch read newline-delimited events with optional `--dry-run`.
+- ✅ `template` – prints example payload for copy/paste or LLM usage.
 
 ### `plausible queue`
-- `drain` – force worker to process queued jobs.
-- `inspect` – display pending requests, retry counts, and ETA per job.
+- ⏳ `drain` – force worker to process queued jobs.
+- ⏳ `inspect` – display pending requests, retry counts, and ETA per job.
 
 ### `plausible status`
 - Display current account, API health, queued job counts, remaining hourly/daily budget, last reset timestamp.
@@ -119,6 +124,7 @@ sequenceDiagram
 - Token bucket capacity can be tuned per account; draining resets at top of hour.
 - Daily ledger resets on local midnight; `plausible status --reset-usage` manually clears counters.
 - Worker tracks `RetryAfter` headers, applies exponential backoff (base 2, capped 60s).
+- Implementation note: daily override plumbing is pending; current build mirrors hourly quota for daily limits.
 
 ## Multi-Account Handling
 - Config directory: `~/.config/plausible-cli/`
@@ -127,6 +133,7 @@ sequenceDiagram
   - `usage.json` – rate-limit counters per account, day, endpoint category.
 - Accounts referenced by slug (e.g., `prod`, `staging`).
 - Environment variable overrides: `PLAUSIBLE_ACCOUNT`, `PLAUSIBLE_API_KEY`.
+- Implementation note: keyring/OS credential backend is planned; current builds persist `.key` files with `0o600` permissions.
 
 ## Output Modes
 - Human readable tables via `tabled` or `comfy-table`.
