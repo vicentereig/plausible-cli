@@ -1,0 +1,139 @@
+# Plausible CLI – LLM Reference
+
+This document is designed for automation agents (ChatGPT, Claude, etc.) that
+need to drive the CLI safely and deterministically.
+
+## Environment Assumptions
+
+- Binary name: `plausible`
+- Configuration directory: `~/.config/plausible-cli/`
+- Multi-account storage handled via `plausible accounts ...` commands.
+- Every command accepts `--output json` to emit machine-friendly responses.
+
+## Setup Workflow
+
+1. Add an account:
+   ```
+   plausible accounts add \
+     --alias <alias> \
+     --api-key <PLAUSIBLE_API_KEY> \
+     [--label <label>] \
+     [--email <email>] \
+     [--description <notes>]
+   ```
+2. Optionally select a default account:
+   ```
+   plausible accounts use --alias <alias>
+   ```
+3. Verify configuration:
+   ```
+   plausible accounts list --output json
+   ```
+
+Use `--account <alias>` on any downstream command to override the default.
+
+## Command Surface
+
+### `plausible status`
+- Summarises hourly and daily rate-limit usage.
+- JSON schema:
+  ```jsonc
+  {
+    "hourly": { "used": number, "limit": number, "remaining": number, "reset_at": string },
+    "daily": { "used": number|null, "limit": number|null, "remaining": number|null, "reset_at": string|null }
+  }
+  ```
+
+### `plausible sites list`
+- Lists available sites for the current account.
+- JSON schema: array of site objects
+  ```jsonc
+  [
+    {
+      "domain": "example.com",
+      "timezone": "Europe/Berlin|null",
+      "public": true|false|null,
+      "verified": true|false|null
+    }
+  ]
+  ```
+
+### `plausible stats aggregate`
+- Wraps `GET /api/v1/stats/aggregate`.
+- Required flags:
+  - `--site <site_id>`
+- Optional flags:
+  - `--metric <metric>` (repeatable)
+  - `--period <period>` (e.g., `7d`, `30d`, `month`, `custom`)
+  - `--date <YYYY-MM-DD,YYYY-MM-DD>` (for custom periods)
+  - `--filters <filter>` (repeatable Plausible filter expressions)
+  - `--properties <prop>` (repeatable)
+  - `--compare <modifier>`
+  - `--interval <granularity>`
+  - `--sort <field>`
+  - `--limit <number>`
+  - `--page <number>`
+- JSON output matches the Plausible API response:
+  ```jsonc
+  {
+    "results": {
+      "visitors": 123,
+      "pageviews": 456
+    }
+  }
+  ```
+
+### `plausible events template`
+- Emits a canonical custom-event payload for reference.
+- Use as a starting point for constructing POST bodies.
+
+### `plausible accounts ...`
+- `list [--output json]`
+- `add --alias <alias> --api-key <key> [--label ... --email ... --description ...]`
+- `use --alias <alias>`
+- `remove --alias <alias>`
+- `export [--json]`
+
+## Automation Patterns
+
+- Always request JSON output for deterministic parsing:
+  ```
+  plausible stats aggregate --site example.com --period 7d --output json
+  ```
+- Ensure rate limits before chaining additional API calls:
+  ```
+  plausible status --output json
+  ```
+- When issuing multiple queries, reuse the same account alias to leverage
+  cached rate-limit counters.
+
+## Error Handling
+
+- `plausible` exits with non-zero codes on failures; stderr contains human-friendly context.
+- Network/API errors propagate as `execution error: ...`.
+- Missing default account returns the message “no default account configured; add an account or pass --account”.
+
+## Prompt Snippets
+
+**Query last-week visitors for a site:**
+```
+Run: plausible stats aggregate --site example.com --period 7d --metric visitors --output json
+```
+
+**Switch account before retrieving a list of sites:**
+```
+Run:
+plausible accounts use --alias marketing
+plausible sites list --output json
+```
+
+**Check rate limit and only continue if at least 50 requests remain:**
+1. `plausible status --output json`
+2. Parse `hourly.remaining`; abort if `< 50`.
+
+## Safety Tips
+
+- Never echo API keys in transcripts; rely on `accounts add`.
+- Retry with exponential backoff if the worker reports HTTP 429; the internal rate limiter will queue subsequent jobs safely.
+- Use `--output json` when instructing an LLM to parse output programmatically; fall back to human-readable mode for operators.
+
