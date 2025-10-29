@@ -1,9 +1,47 @@
 use super::{ConfigError, ConfigPaths};
+use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::io::{Read, Write};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+
+const KEYRING_SERVICE: &str = "plausible-cli";
+
+fn keyring_enabled() -> bool {
+    if let Ok(value) = env::var("PLAUSIBLE_CLI_DISABLE_KEYRING") {
+        let v = value.to_lowercase();
+        return !(v == "1" || v == "true");
+    }
+    if let Ok(ci) = env::var("CI") {
+        let ci = ci.to_lowercase();
+        if ci == "1" || ci == "true" {
+            return false;
+        }
+    }
+    true
+}
+
+fn keyring_entry(alias: &str) -> Result<Entry, KeyringError> {
+    Entry::new(KEYRING_SERVICE, alias)
+}
+
+fn store_keyring_secret(alias: &str, secret: &str) -> Result<(), KeyringError> {
+    keyring_entry(alias)?.set_password(secret)
+}
+
+fn read_keyring_secret(alias: &str) -> Result<String, KeyringError> {
+    keyring_entry(alias)?.get_password()
+}
+
+fn delete_keyring_secret(alias: &str) -> Result<(), KeyringError> {
+    match keyring_entry(alias)?.delete_password() {
+        Err(KeyringError::NoEntry) => Ok(()),
+        other => other,
+    }
+}
 
 /// Top-level account store coordinating metadata and secrets.
 #[derive(Debug, Clone)]
@@ -34,6 +72,7 @@ impl AccountStore {
             return Err(AccountStoreError::DuplicateAlias(alias.to_string()));
         }
         state.accounts.insert(alias.to_string(), profile);
+        state.settings.entry(alias.to_string()).or_default();
         if state.default_account.is_none() {
             state.default_account = Some(alias.to_string());
         }
@@ -60,6 +99,7 @@ impl AccountStore {
                 .as_ref()
                 .map(|default| default == alias)
                 .unwrap_or(false),
+            daily_budget: state.daily_budget(alias),
         })
     }
 
@@ -76,6 +116,7 @@ impl AccountStore {
                     .as_ref()
                     .map(|default| default == alias)
                     .unwrap_or(false),
+                daily_budget: state.daily_budget(alias),
             });
         }
         Ok(summaries)
@@ -98,12 +139,28 @@ impl AccountStore {
         Ok(())
     }
 
+    /// Set or clear the daily budget for an account.
+    pub fn set_daily_budget(
+        &self,
+        alias: &str,
+        budget: Option<NonZeroU32>,
+    ) -> Result<(), AccountStoreError> {
+        let mut state = self.read_state()?;
+        if !state.accounts.contains_key(alias) {
+            return Err(AccountStoreError::AccountNotFound(alias.to_string()));
+        }
+        let entry = state.settings.entry(alias.to_string()).or_default();
+        entry.daily_budget = budget.map(NonZeroU32::get);
+        self.write_state(&state)
+    }
+
     /// Remove an account and associated secret.
     pub fn remove_account(&self, alias: &str) -> Result<(), AccountStoreError> {
         let mut state = self.read_state()?;
         if state.accounts.remove(alias).is_none() {
             return Err(AccountStoreError::AccountNotFound(alias.to_string()));
         }
+        state.settings.remove(alias);
         if state.default_account.as_deref() == Some(alias) {
             state.default_account = state.accounts.keys().next().cloned();
         }
@@ -123,6 +180,7 @@ impl AccountStore {
                 label: summary.profile.label,
                 email: summary.profile.email,
                 description: summary.profile.description,
+                daily_budget: summary.daily_budget.map(|v| v.get()),
             })
             .collect())
     }
@@ -154,6 +212,51 @@ impl AccountStore {
     }
 
     fn write_secret(&self, alias: &str, api_key: &str) -> Result<(), AccountStoreError> {
+        if keyring_enabled() {
+            match store_keyring_secret(alias, api_key) {
+                Ok(()) => {
+                    let _ = self.delete_secret_file(alias);
+                    return Ok(());
+                }
+                Err(err) => {
+                    if cfg!(debug_assertions) {
+                        eprintln!("keyring write failed for {alias}: {err:?}");
+                    }
+                }
+            }
+        }
+        self.write_secret_file(alias, api_key)
+    }
+
+    fn read_secret(&self, alias: &str) -> Result<String, AccountStoreError> {
+        if keyring_enabled() {
+            match read_keyring_secret(alias) {
+                Ok(secret) => return Ok(secret.trim().to_string()),
+                Err(KeyringError::NoEntry) => {
+                    // fall back to file
+                }
+                Err(err) => {
+                    if cfg!(debug_assertions) {
+                        eprintln!("keyring read failed for {alias}: {err:?}");
+                    }
+                }
+            }
+        }
+        self.read_secret_file(alias)
+    }
+
+    fn delete_secret(&self, alias: &str) -> Result<(), AccountStoreError> {
+        if keyring_enabled() {
+            if let Err(err) = delete_keyring_secret(alias) {
+                if cfg!(debug_assertions) {
+                    eprintln!("keyring delete failed for {alias}: {err:?}");
+                }
+            }
+        }
+        self.delete_secret_file(alias)
+    }
+
+    fn write_secret_file(&self, alias: &str, api_key: &str) -> Result<(), AccountStoreError> {
         let path = self.secret_path(alias);
         let mut file = fs::File::create(&path).map_err(|source| AccountStoreError::Io {
             path: path.clone(),
@@ -167,7 +270,7 @@ impl AccountStore {
             })
     }
 
-    fn read_secret(&self, alias: &str) -> Result<String, AccountStoreError> {
+    fn read_secret_file(&self, alias: &str) -> Result<String, AccountStoreError> {
         let path = self.secret_path(alias);
         let contents = fs::read_to_string(&path).map_err(|source| AccountStoreError::Io {
             path: path.clone(),
@@ -176,7 +279,7 @@ impl AccountStore {
         Ok(contents.trim().to_string())
     }
 
-    fn delete_secret(&self, alias: &str) -> Result<(), AccountStoreError> {
+    fn delete_secret_file(&self, alias: &str) -> Result<(), AccountStoreError> {
         let path = self.secret_path(alias);
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -247,6 +350,7 @@ pub struct AccountSummary {
     pub alias: String,
     pub profile: AccountProfile,
     pub is_default: bool,
+    pub daily_budget: Option<NonZeroU32>,
 }
 
 /// Exported account metadata for sharing without secrets.
@@ -257,6 +361,7 @@ pub struct AccountExport {
     pub label: Option<String>,
     pub email: Option<String>,
     pub description: Option<String>,
+    pub daily_budget: Option<u32>,
 }
 
 /// Full account record with secrets.
@@ -266,6 +371,7 @@ pub struct AccountRecord {
     pub api_key: String,
     pub profile: AccountProfile,
     pub is_default: bool,
+    pub daily_budget: Option<NonZeroU32>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -274,6 +380,23 @@ struct AccountsState {
     default_account: Option<String>,
     #[serde(default)]
     accounts: BTreeMap<String, AccountProfile>,
+    #[serde(default)]
+    settings: BTreeMap<String, AccountSettings>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AccountSettings {
+    #[serde(default)]
+    daily_budget: Option<u32>,
+}
+
+impl AccountsState {
+    fn daily_budget(&self, alias: &str) -> Option<NonZeroU32> {
+        self.settings
+            .get(alias)
+            .and_then(|settings| settings.daily_budget)
+            .and_then(NonZeroU32::new)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -306,6 +429,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn store_for_test() -> (AccountStore, tempfile::TempDir) {
+        std::env::set_var("PLAUSIBLE_CLI_DISABLE_KEYRING", "1");
         let tmp = tempdir().expect("tmpdir");
         let paths = ConfigPaths::from_base_dir(tmp.path());
         let store = AccountStore::new(paths).expect("store");
@@ -389,6 +513,26 @@ mod tests {
         assert_eq!(accounts[0].alias, "second");
         assert!(accounts[0].is_default);
         assert!(store.get_account("first").is_err());
+    }
+
+    #[test]
+    fn set_daily_budget_updates_state() {
+        let (store, _tmp) = store_for_test();
+        store
+            .add_account("acct", "key", AccountProfile::default())
+            .expect("add");
+
+        let budget = NonZeroU32::new(500).unwrap();
+        store
+            .set_daily_budget("acct", Some(budget))
+            .expect("set budget");
+
+        let record = store.get_account("acct").expect("record");
+        assert_eq!(record.daily_budget, Some(budget));
+
+        store.set_daily_budget("acct", None).expect("clear budget");
+        let record = store.get_account("acct").expect("record");
+        assert!(record.daily_budget.is_none());
     }
 
     #[test]

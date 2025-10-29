@@ -131,6 +131,8 @@ pub enum AccountsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Configure account-specific rate limit budgets.
+    Budget(SetBudgetArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -150,6 +152,19 @@ pub struct AddAccountArgs {
     /// Optional description for humans/LLMs.
     #[arg(long)]
     pub description: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct SetBudgetArgs {
+    /// Account alias to configure.
+    #[arg(long)]
+    pub alias: String,
+    /// Daily request budget (omit or set to zero to clear).
+    #[arg(long)]
+    pub daily: Option<u32>,
+    /// Clear any configured daily budget.
+    #[arg(long)]
+    pub clear: bool,
 }
 
 #[derive(Args, Debug, Default, Clone)]
@@ -373,8 +388,8 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
     let account_alias = resolve_account(&account_store, &cli.account)?;
     let account = account_store.get_account(&account_alias)?;
     let client = build_client(&cli, &account)?;
-    let rate_limiter =
-        RateLimiter::new(paths.clone(), &account_alias, RateLimitConfig::default()).await?;
+    let rate_config = RateLimitConfig::default().with_daily_quota(account.daily_budget);
+    let rate_limiter = RateLimiter::new(paths.clone(), &account_alias, rate_config).await?;
 
     let executor = Arc::new(PlausibleExecutor::new(client));
     let queue = Worker::spawn(executor, rate_limiter.clone(), None);
@@ -1116,6 +1131,38 @@ fn handle_account_command(
                 render_account_export(&exports)?;
             }
         }
+        AccountsCommand::Budget(args) => {
+            if args.clear && args.daily.is_some() {
+                return Err(Error::InvalidInput(
+                    "use either --daily or --clear when configuring budgets".into(),
+                ));
+            }
+
+            let budget = if args.clear {
+                None
+            } else if let Some(value) = args.daily {
+                if value == 0 {
+                    None
+                } else {
+                    Some(NonZeroU32::new(value).ok_or_else(|| {
+                        Error::InvalidInput("daily budget must be greater than zero".into())
+                    })?)
+                }
+            } else {
+                return Err(Error::InvalidInput(
+                    "provide --daily to set or --clear to remove a budget".into(),
+                ));
+            };
+
+            store.set_daily_budget(&args.alias, budget)?;
+            match budget {
+                Some(limit) => println!(
+                    "Set daily budget for '{}' to {} requests.",
+                    args.alias, limit
+                ),
+                None => println!("Cleared daily budget for '{}'.", args.alias),
+            }
+        }
     }
     Ok(())
 }
@@ -1137,6 +1184,7 @@ fn render_account_list(accounts: &[AccountSummary], format: OutputFormat) -> Res
                         "email": account.profile.email,
                         "description": account.profile.description,
                         "default": account.is_default,
+                        "daily_budget": account.daily_budget.map(|v| v.get()),
                     })
                 })
                 .collect();
@@ -1291,6 +1339,7 @@ struct AccountRow {
     label: String,
     email: String,
     default: String,
+    daily_budget: String,
 }
 
 impl From<&AccountSummary> for AccountRow {
@@ -1312,6 +1361,10 @@ impl From<&AccountSummary> for AccountRow {
             } else {
                 "no".into()
             },
+            daily_budget: summary
+                .daily_budget
+                .map(|v| v.get().to_string())
+                .unwrap_or_else(|| "-".into()),
         }
     }
 }
@@ -1323,6 +1376,7 @@ struct ExportRow {
     email: String,
     default: String,
     description: String,
+    daily_budget: String,
 }
 
 impl From<&AccountExport> for ExportRow {
@@ -1337,6 +1391,10 @@ impl From<&AccountExport> for ExportRow {
                 "no".into()
             },
             description: export.description.clone().unwrap_or_else(|| "".into()),
+            daily_budget: export
+                .daily_budget
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
         }
     }
 }
