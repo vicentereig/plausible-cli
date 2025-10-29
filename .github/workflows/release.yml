@@ -35,6 +35,8 @@ jobs:
           path: ${{ steps.package.outputs.archive }}
 
   release:
+    permissions:
+      contents: write
     needs: build
     runs-on: ubuntu-latest
     steps:
