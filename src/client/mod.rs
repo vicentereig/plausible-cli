@@ -74,6 +74,102 @@ impl PlausibleClient {
         self.handle_response(response).await
     }
 
+    /// Create a Plausible site.
+    pub async fn create_site(
+        &self,
+        request: &CreateSiteRequest,
+    ) -> Result<SiteSummary, ClientError> {
+        if request.domain.trim().is_empty() {
+            return Err(ClientError::Validation("domain cannot be empty"));
+        }
+        let url = self.endpoint("api/v1/sites")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(request)
+            .send()
+            .await
+            .map_err(ClientError::Http)?;
+        self.handle_response(response).await
+    }
+
+    /// Update mutable properties for a Plausible site.
+    pub async fn update_site(
+        &self,
+        site_id: &str,
+        request: &UpdateSiteRequest,
+    ) -> Result<SiteSummary, ClientError> {
+        if site_id.trim().is_empty() {
+            return Err(ClientError::Validation("site_id cannot be empty"));
+        }
+        let url = self.endpoint(&format!("api/v1/sites/{site_id}"))?;
+        let response = self
+            .http
+            .patch(url)
+            .bearer_auth(&self.api_key)
+            .json(request)
+            .send()
+            .await
+            .map_err(ClientError::Http)?;
+        self.handle_response(response).await
+    }
+
+    /// Reset statistics for a site.
+    pub async fn reset_site_stats(
+        &self,
+        site_id: &str,
+        request: &ResetSiteStatsRequest,
+    ) -> Result<(), ClientError> {
+        if site_id.trim().is_empty() {
+            return Err(ClientError::Validation("site_id cannot be empty"));
+        }
+        let url = self.endpoint(&format!("api/v1/sites/{site_id}/reset-stats"))?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(request)
+            .send()
+            .await
+            .map_err(ClientError::Http)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("unable to read error body"));
+            Err(ClientError::Api { status, message })
+        }
+    }
+
+    /// Delete a Plausible site.
+    pub async fn delete_site(&self, site_id: &str) -> Result<(), ClientError> {
+        if site_id.trim().is_empty() {
+            return Err(ClientError::Validation("site_id cannot be empty"));
+        }
+        let url = self.endpoint(&format!("api/v1/sites/{site_id}"))?;
+        let response = self
+            .http
+            .delete(url)
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(ClientError::Http)?;
+        if response.status().is_success() || response.status() == StatusCode::NO_CONTENT {
+            Ok(())
+        } else {
+            let status = response.status();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("unable to read error body"));
+            Err(ClientError::Api { status, message })
+        }
+    }
+
     /// Query aggregate statistics for a site.
     pub async fn stats_aggregate(
         &self,
@@ -183,6 +279,26 @@ impl PlausibleClient {
             .get(url)
             .bearer_auth(&self.api_key)
             .query(&params)
+            .send()
+            .await
+            .map_err(ClientError::Http)?;
+        self.handle_response(response).await
+    }
+
+    /// Fetch realtime visitor counts.
+    pub async fn stats_realtime_visitors(
+        &self,
+        site_id: &str,
+    ) -> Result<RealtimeVisitorsResponse, ClientError> {
+        if site_id.trim().is_empty() {
+            return Err(ClientError::Validation("site_id cannot be empty"));
+        }
+        let url = self.endpoint("api/v1/stats/realtime/visitors")?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(&self.api_key)
+            .query(&[("site_id", site_id)])
             .send()
             .await
             .map_err(ClientError::Http)?;
@@ -411,6 +527,46 @@ pub struct SiteSummary {
     pub verified: Option<bool>,
 }
 
+/// Request payload to create a new site.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateSiteRequest {
+    pub domain: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public: Option<bool>,
+}
+
+/// Request payload to update an existing site.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UpdateSiteRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public: Option<bool>,
+    #[serde(rename = "is_main_site", skip_serializing_if = "Option::is_none")]
+    pub main_site: Option<bool>,
+}
+
+/// Request payload for resetting site statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ResetSiteStatsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+}
+
+/// Response payload for realtime visitors.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RealtimeVisitorsResponse {
+    pub visitors: i64,
+    #[serde(default)]
+    pub pageviews: Option<i64>,
+    #[serde(default)]
+    pub bounce_rate: Option<f64>,
+    #[serde(default)]
+    pub visit_duration: Option<f64>,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum ClientError {
     #[error("invalid base URL: {0}")]
@@ -430,7 +586,7 @@ pub enum ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::prelude::*;
+    use httpmock::{prelude::*, Method::PATCH};
     use serde_json::json;
 
     fn test_client(api_key: &str, server: &MockServer) -> PlausibleClient {
@@ -654,5 +810,151 @@ mod tests {
         let event = serde_json::Value::String("not-object".into());
         let err = client.send_event(&event).await.expect_err("validation");
         assert!(matches!(err, ClientError::Validation(msg) if msg.contains("JSON object")));
+    }
+
+    #[tokio::test]
+    async fn create_site_posts_payload() {
+        let server = MockServer::start_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/sites")
+                    .header("authorization", "Bearer site-key")
+                    .json_body(json!({
+                        "domain": "example.com",
+                        "timezone": "UTC",
+                        "public": true
+                    }));
+                then.status(201)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "domain": "example.com",
+                        "timezone": "UTC",
+                        "public": true,
+                        "verified": false
+                    }));
+            })
+            .await;
+
+        let client = test_client("site-key", &server);
+        let site = client
+            .create_site(&CreateSiteRequest {
+                domain: "example.com".into(),
+                timezone: Some("UTC".into()),
+                public: Some(true),
+            })
+            .await
+            .expect("create site");
+        assert_eq!(site.domain, "example.com");
+        assert_eq!(site.public, Some(true));
+    }
+
+    #[tokio::test]
+    async fn update_site_sends_patch_body() {
+        let server = MockServer::start_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(PATCH)
+                    .path("/api/v1/sites/example.com")
+                    .header("authorization", "Bearer update-key")
+                    .json_body(json!({ "timezone": "Europe/Berlin" }));
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "domain": "example.com",
+                        "timezone": "Europe/Berlin"
+                    }));
+            })
+            .await;
+
+        let client = test_client("update-key", &server);
+        let site = client
+            .update_site(
+                "example.com",
+                &UpdateSiteRequest {
+                    timezone: Some("Europe/Berlin".into()),
+                    public: None,
+                    main_site: None,
+                },
+            )
+            .await
+            .expect("update site");
+        assert_eq!(site.timezone.as_deref(), Some("Europe/Berlin"));
+    }
+
+    #[tokio::test]
+    async fn reset_site_stats_posts_date_range() {
+        let server = MockServer::start_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/sites/example.com/reset-stats")
+                    .header("authorization", "Bearer reset-key")
+                    .json_body(json!({ "date": "2024-01-01" }));
+                then.status(202);
+            })
+            .await;
+
+        let client = test_client("reset-key", &server);
+        client
+            .reset_site_stats(
+                "example.com",
+                &ResetSiteStatsRequest {
+                    date: Some("2024-01-01".into()),
+                },
+            )
+            .await
+            .expect("reset stats");
+    }
+
+    #[tokio::test]
+    async fn delete_site_issues_delete() {
+        let server = MockServer::start_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path("/api/v1/sites/example.com")
+                    .header("authorization", "Bearer delete-key");
+                then.status(204);
+            })
+            .await;
+
+        let client = test_client("delete-key", &server);
+        client
+            .delete_site("example.com")
+            .await
+            .expect("delete site");
+    }
+
+    #[tokio::test]
+    async fn realtime_visitors_fetches_metrics() {
+        let server = MockServer::start_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/stats/realtime/visitors")
+                    .header("authorization", "Bearer realtime-key")
+                    .query_param("site_id", "example.com");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "visitors": 5,
+                        "pageviews": 7
+                    }));
+            })
+            .await;
+
+        let client = test_client("realtime-key", &server);
+        let realtime = client
+            .stats_realtime_visitors("example.com")
+            .await
+            .expect("realtime stats");
+        assert_eq!(realtime.visitors, 5);
+        assert_eq!(realtime.pageviews, Some(7));
     }
 }

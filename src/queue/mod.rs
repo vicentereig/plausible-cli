@@ -1,7 +1,8 @@
 use crate::{
     client::{
-        AggregateQuery, AggregateResponse, BreakdownQuery, BreakdownResponse, SiteSummary,
-        TimeseriesQuery, TimeseriesResponse,
+        AggregateQuery, AggregateResponse, BreakdownQuery, BreakdownResponse, CreateSiteRequest,
+        RealtimeVisitorsResponse, ResetSiteStatsRequest, SiteSummary, TimeseriesQuery,
+        TimeseriesResponse, UpdateSiteRequest,
     },
     rate_limit::{RateLimitError, RateLimiter, RateStatus},
 };
@@ -37,6 +38,19 @@ impl JobRequest {
             JobKind::StatsBreakdown { query } => {
                 format!("Breakdown stats for {} ({:?})", self.account, query.metrics)
             }
+            JobKind::SiteCreate { request } => {
+                format!("Create site {}", request.domain)
+            }
+            JobKind::SiteUpdate { site_id, .. } => {
+                format!("Update site {}", site_id)
+            }
+            JobKind::SiteReset { site_id, .. } => {
+                format!("Reset stats for {}", site_id)
+            }
+            JobKind::SiteDelete { site_id } => format!("Delete site {}", site_id),
+            JobKind::StatsRealtime { site_id } => {
+                format!("Realtime stats for {}", site_id)
+            }
             JobKind::EventSend { .. } => format!("Send event for {}", self.account),
             JobKind::EventsImport { events } => {
                 format!("Import {} events for {}", events.len(), self.account)
@@ -49,12 +63,41 @@ impl JobRequest {
 #[derive(Debug, Clone)]
 pub enum JobKind {
     ListSites,
-    StatsAggregate { query: Box<AggregateQuery> },
-    StatsTimeseries { query: Box<TimeseriesQuery> },
-    StatsBreakdown { query: Box<BreakdownQuery> },
-    EventSend { event: serde_json::Value },
-    EventsImport { events: Vec<serde_json::Value> },
-    Custom { label: String },
+    StatsAggregate {
+        query: Box<AggregateQuery>,
+    },
+    StatsTimeseries {
+        query: Box<TimeseriesQuery>,
+    },
+    StatsBreakdown {
+        query: Box<BreakdownQuery>,
+    },
+    SiteCreate {
+        request: Box<CreateSiteRequest>,
+    },
+    SiteUpdate {
+        site_id: String,
+        request: Box<UpdateSiteRequest>,
+    },
+    SiteReset {
+        site_id: String,
+        request: Box<ResetSiteStatsRequest>,
+    },
+    SiteDelete {
+        site_id: String,
+    },
+    StatsRealtime {
+        site_id: String,
+    },
+    EventSend {
+        event: serde_json::Value,
+    },
+    EventsImport {
+        events: Vec<serde_json::Value>,
+    },
+    Custom {
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +106,11 @@ pub enum JobResponse {
     StatsAggregate(AggregateResponse),
     StatsTimeseries(TimeseriesResponse),
     StatsBreakdown(BreakdownResponse),
+    SiteCreated(SiteSummary),
+    SiteUpdated(SiteSummary),
+    SiteReset,
+    SiteDeleted,
+    StatsRealtime(RealtimeVisitorsResponse),
     EventAck,
     EventsProcessed { processed: usize },
     Acknowledged,

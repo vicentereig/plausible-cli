@@ -4,11 +4,11 @@
 Deliver an ergonomic CLI that surfaces Plausible Analytics capabilities to humans and LLMs, while respecting rate limits, juggling multiple accounts, and enabling queued API execution.
 
 ## Current Status — 2025-10-29
-- ✅ Foundations in place: repo scaffolding, account store (file-backed), Plausible client (sites + stats aggregate/timeseries/breakdown + events send), rate limiter scaffold, queue/worker with inspect/drain, CLI surface (`status`, `sites list`, `stats aggregate/timeseries/breakdown`, `events template/send/import`, `accounts` CRUD), docs/LLM artefacts, CI wiring (latest on `main` @ 3a2b77c).
-- ⏳ Features to extend: stats `realtime`, sites CRUD/reset/delete, queue retry/backoff controls, daily budget configurability, secure keyring fallback, telemetry export.
-- 🔬 Test gaps: full CLI integration coverage via `assert_cmd` + JSON snapshots, expanded HTTP mocks (sites CRUD, realtime), backpressure + large import cases, keyring mock coverage.
+- ✅ Foundations in place: repo scaffolding, account store (file-backed), Plausible client (sites list/create/update/reset/delete, stats aggregate/timeseries/breakdown/realtime, events send), rate limiter scaffold, queue/worker with inspect/drain, CLI surface (`status`, `sites list/create/update/reset/delete`, `stats aggregate/timeseries/breakdown/realtime`, `events template/send/import`, `queue inspect/drain`, `accounts` CRUD), docs/LLM artefacts, CI wiring (latest on `main` @ 37774b9).
+- ⏳ Features to extend: queue retry/backoff controls, daily budget configurability, secure keyring fallback, richer telemetry/export surfaces.
+- 🔬 Test gaps: full CLI integration coverage via `assert_cmd` + JSON snapshots, expanded HTTP mocks (sites destructive actions, realtime edge cases), backpressure + large import cases, keyring mock coverage.
 - 🚀 Distribution polish pending: GitHub release workflow, `cargo install` docs, Homebrew tap automation, tagged release + changelog.
-- 🧭 Next sprint focus: persistence polish (daily budget + keyring), extend site/event surface, then harden integration tests before release packaging.
+- 🧭 Next sprint focus: persistence polish (daily budget + keyring), queue resilience, and end-to-end CLI tests before release packaging.
 
 ## Release Scope
 - Sites, Stats, Events API coverage.
@@ -82,8 +82,8 @@ gantt
 - ⏳ Tests: concurrency under load, ensures queue drains, error propagation.
 
 ### 6. CLI Commands & Output
-- ✅ Sites `list`; ⏳ `create/update/reset/delete`.
-- ✅ Stats `aggregate/timeseries/breakdown`; ⏳ `realtime` with shared flags.
+- ✅ Sites `list/create/update/reset/delete`.
+- ✅ Stats `aggregate/timeseries/breakdown/realtime` with shared flags.
 - ✅ Events `template/send/import`.
 - ✅ Queue `inspect/drain`.
 - ✅ Status (reports account, limits, queue stats, API health).

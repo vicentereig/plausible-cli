@@ -1,7 +1,8 @@
 use crate::{
     client::{
-        AggregateQuery, BreakdownQuery, BreakdownResponse, PlausibleClient, SiteSummary,
-        TimeseriesQuery, TimeseriesResponse,
+        AggregateQuery, BreakdownQuery, BreakdownResponse, CreateSiteRequest, PlausibleClient,
+        RealtimeVisitorsResponse, ResetSiteStatsRequest, SiteSummary, TimeseriesQuery,
+        TimeseriesResponse, UpdateSiteRequest,
     },
     config::accounts::{
         AccountExport, AccountProfile, AccountRecord, AccountStore, AccountSummary,
@@ -75,6 +76,14 @@ pub enum Commands {
 pub enum SitesCommand {
     /// List all sites visible to the current account.
     List,
+    /// Create a new Plausible site.
+    Create(SiteCreateArgs),
+    /// Update properties on an existing site.
+    Update(SiteUpdateArgs),
+    /// Reset statistics for a site.
+    Reset(SiteResetArgs),
+    /// Delete a site.
+    Delete(SiteDeleteArgs),
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -85,6 +94,8 @@ pub enum StatsCommand {
     Timeseries(StatsTimeseriesArgs),
     /// Run a breakdown stats query.
     Breakdown(StatsBreakdownArgs),
+    /// Fetch realtime visitors.
+    Realtime(StatsRealtimeArgs),
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -179,6 +190,55 @@ pub struct StatsAggregateArgs {
 }
 
 #[derive(Args, Debug, Default, Clone)]
+pub struct SiteCreateArgs {
+    /// Domain for the new site.
+    #[arg(long)]
+    pub domain: String,
+    /// Timezone identifier.
+    #[arg(long)]
+    pub timezone: Option<String>,
+    /// Whether the site should be public (provide true/false).
+    #[arg(long)]
+    pub public: Option<bool>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct SiteUpdateArgs {
+    /// Site domain or site_id to update.
+    #[arg(long)]
+    pub site: String,
+    /// Update the timezone.
+    #[arg(long)]
+    pub timezone: Option<String>,
+    /// Update the public flag (true/false).
+    #[arg(long)]
+    pub public: Option<bool>,
+    /// Toggle whether this is the main site (true/false).
+    #[arg(long = "main-site")]
+    pub main_site: Option<bool>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct SiteResetArgs {
+    /// Site domain or site_id to reset.
+    #[arg(long)]
+    pub site: String,
+    /// Optional cut-off date (YYYY-MM-DD).
+    #[arg(long)]
+    pub date: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct SiteDeleteArgs {
+    /// Site domain or site_id to delete.
+    #[arg(long)]
+    pub site: String,
+    /// Skip interactive confirmation.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Debug, Default, Clone)]
 pub struct StatsTimeseriesArgs {
     /// Site domain or site_id to query.
     #[arg(long)]
@@ -255,6 +315,13 @@ pub struct StatsBreakdownArgs {
     pub include: Option<String>,
 }
 
+#[derive(Args, Debug, Default, Clone)]
+pub struct StatsRealtimeArgs {
+    /// Site domain or site_id to query.
+    #[arg(long)]
+    pub site: String,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct EventSendArgs {
     /// Provide a JSON string payload inline.
@@ -316,83 +383,176 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
         Commands::Status => {
             render_status(&rate_limiter, cli.output).await?;
         }
-        Commands::Sites {
-            command: SitesCommand::List,
-        } => {
-            let ticket = queue
-                .submit(
-                    JobRequest {
-                        account: account_alias.clone(),
-                        kind: JobKind::ListSites,
-                    },
-                    NonZeroU32::new(1).unwrap(),
-                )
-                .await?;
-            let response = ticket.await_result().await?;
-            if let JobResponse::Sites(sites) = response {
-                render_sites(&sites, cli.output)?;
-            }
-        }
-        Commands::Stats {
-            command: StatsCommand::Aggregate(args),
-        } => {
-            let query = build_aggregate_query(args);
-            let ticket = queue
-                .submit(
-                    JobRequest {
-                        account: account_alias.clone(),
-                        kind: JobKind::StatsAggregate {
-                            query: Box::new(query),
+        Commands::Sites { command } => match command {
+            SitesCommand::List => {
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::ListSites,
                         },
-                    },
-                    NonZeroU32::new(1).unwrap(),
-                )
-                .await?;
-            let response = ticket.await_result().await?;
-            if let JobResponse::StatsAggregate(result) = response {
-                render_aggregate(&result, cli.output)?;
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::Sites(sites) = response {
+                    render_sites(&sites, cli.output)?;
+                }
             }
-        }
-        Commands::Stats {
-            command: StatsCommand::Timeseries(args),
-        } => {
-            let query = build_timeseries_query(args);
-            let ticket = queue
-                .submit(
-                    JobRequest {
-                        account: account_alias.clone(),
-                        kind: JobKind::StatsTimeseries {
-                            query: Box::new(query),
+            SitesCommand::Create(args) => {
+                let request = build_create_site_request(args);
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::SiteCreate {
+                                request: Box::new(request),
+                            },
                         },
-                    },
-                    NonZeroU32::new(1).unwrap(),
-                )
-                .await?;
-            let response = ticket.await_result().await?;
-            if let JobResponse::StatsTimeseries(result) = response {
-                render_timeseries(&result, cli.output)?;
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::SiteCreated(site) = response {
+                    render_site_summary(&site, cli.output)?;
+                }
             }
-        }
-        Commands::Stats {
-            command: StatsCommand::Breakdown(args),
-        } => {
-            let query = build_breakdown_query(args);
-            let ticket = queue
-                .submit(
-                    JobRequest {
-                        account: account_alias.clone(),
-                        kind: JobKind::StatsBreakdown {
-                            query: Box::new(query),
+            SitesCommand::Update(args) => {
+                let (site_id, request) = build_update_site_request(args);
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::SiteUpdate {
+                                site_id,
+                                request: Box::new(request),
+                            },
                         },
-                    },
-                    NonZeroU32::new(1).unwrap(),
-                )
-                .await?;
-            let response = ticket.await_result().await?;
-            if let JobResponse::StatsBreakdown(result) = response {
-                render_breakdown(&result, cli.output)?;
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::SiteUpdated(site) = response {
+                    render_site_summary(&site, cli.output)?;
+                }
             }
-        }
+            SitesCommand::Reset(args) => {
+                let (site_id, request) = build_reset_site_request(args);
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::SiteReset {
+                                site_id,
+                                request: Box::new(request),
+                            },
+                        },
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if matches!(response, JobResponse::SiteReset | JobResponse::Acknowledged) {
+                    println!("Site statistics reset queued successfully.");
+                }
+            }
+            SitesCommand::Delete(args) => {
+                if !args.force && !confirm_deletion(&args.site)? {
+                    println!("Aborted.");
+                } else {
+                    let ticket = queue
+                        .submit(
+                            JobRequest {
+                                account: account_alias.clone(),
+                                kind: JobKind::SiteDelete {
+                                    site_id: args.site.clone(),
+                                },
+                            },
+                            NonZeroU32::new(1).unwrap(),
+                        )
+                        .await?;
+                    let response = ticket.await_result().await?;
+                    if matches!(
+                        response,
+                        JobResponse::SiteDeleted | JobResponse::Acknowledged
+                    ) {
+                        println!("Site '{}' deleted.", args.site);
+                    }
+                }
+            }
+        },
+        Commands::Stats { command } => match command {
+            StatsCommand::Aggregate(args) => {
+                let query = build_aggregate_query(args);
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::StatsAggregate {
+                                query: Box::new(query),
+                            },
+                        },
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::StatsAggregate(result) = response {
+                    render_aggregate(&result, cli.output)?;
+                }
+            }
+            StatsCommand::Timeseries(args) => {
+                let query = build_timeseries_query(args);
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::StatsTimeseries {
+                                query: Box::new(query),
+                            },
+                        },
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::StatsTimeseries(result) = response {
+                    render_timeseries(&result, cli.output)?;
+                }
+            }
+            StatsCommand::Breakdown(args) => {
+                let query = build_breakdown_query(args);
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::StatsBreakdown {
+                                query: Box::new(query),
+                            },
+                        },
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::StatsBreakdown(result) = response {
+                    render_breakdown(&result, cli.output)?;
+                }
+            }
+            StatsCommand::Realtime(args) => {
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::StatsRealtime {
+                                site_id: args.site.clone(),
+                            },
+                        },
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                if let JobResponse::StatsRealtime(result) = response {
+                    render_realtime(&result, cli.output)?;
+                }
+            }
+        },
         Commands::Events { command } => match command {
             EventsCommand::Template => {
                 render_event_template(cli.output)?;
@@ -569,6 +729,34 @@ fn build_breakdown_query(args: &StatsBreakdownArgs) -> BreakdownQuery {
     }
 }
 
+fn build_create_site_request(args: &SiteCreateArgs) -> CreateSiteRequest {
+    CreateSiteRequest {
+        domain: args.domain.clone(),
+        timezone: args.timezone.clone(),
+        public: args.public,
+    }
+}
+
+fn build_update_site_request(args: &SiteUpdateArgs) -> (String, UpdateSiteRequest) {
+    (
+        args.site.clone(),
+        UpdateSiteRequest {
+            timezone: args.timezone.clone(),
+            public: args.public,
+            main_site: args.main_site,
+        },
+    )
+}
+
+fn build_reset_site_request(args: &SiteResetArgs) -> (String, ResetSiteStatsRequest) {
+    (
+        args.site.clone(),
+        ResetSiteStatsRequest {
+            date: args.date.clone(),
+        },
+    )
+}
+
 fn load_event_payload(args: &EventSendArgs) -> Result<serde_json::Value, Error> {
     let sources = args.data.is_some() as u8 + args.file.is_some() as u8 + args.stdin as u8;
     if sources == 0 {
@@ -719,6 +907,19 @@ fn render_sites(sites: &[SiteSummary], format: OutputFormat) -> Result<(), Error
     Ok(())
 }
 
+fn render_site_summary(site: &SiteSummary, format: OutputFormat) -> Result<(), Error> {
+    match format {
+        OutputFormat::Human => {
+            let table = Table::new(vec![SiteRow::from(site)]).to_string();
+            println!("{}", table);
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(site)?);
+        }
+    }
+    Ok(())
+}
+
 fn render_aggregate(
     response: &crate::client::AggregateResponse,
     format: OutputFormat,
@@ -793,6 +994,27 @@ fn render_breakdown(response: &BreakdownResponse, format: OutputFormat) -> Resul
         }
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+    }
+    Ok(())
+}
+
+fn render_realtime(response: &RealtimeVisitorsResponse, format: OutputFormat) -> Result<(), Error> {
+    match format {
+        OutputFormat::Human => {
+            println!("Visitors: {}", response.visitors);
+            if let Some(pageviews) = response.pageviews {
+                println!("Pageviews: {}", pageviews);
+            }
+            if let Some(bounce) = response.bounce_rate {
+                println!("Bounce rate: {:.2}%", bounce * 100.0);
+            }
+            if let Some(duration) = response.visit_duration {
+                println!("Visit duration: {:.2}s", duration);
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(response)?);
         }
     }
     Ok(())
@@ -1029,6 +1251,13 @@ impl From<&QueueSnapshot> for QueueRow {
     }
 }
 
+fn confirm_deletion(site: &str) -> Result<bool, Error> {
+    println!("Delete site '{}'? Type 'yes' to confirm:", site);
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim().to_lowercase().as_str(), "yes" | "y"))
+}
+
 fn format_metrics(map: &serde_json::Map<String, serde_json::Value>, skip: &[&str]) -> String {
     map.iter()
         .filter(|(key, _)| !skip.iter().any(|skip_key| *skip_key == key.as_str()))
@@ -1204,6 +1433,45 @@ mod tests {
             _ => panic!("unexpected error"),
         }
     }
+
+    #[test]
+    fn build_create_site_request_sets_optional_fields() {
+        let args = SiteCreateArgs {
+            domain: "example.com".into(),
+            timezone: Some("UTC".into()),
+            public: Some(true),
+        };
+        let request = build_create_site_request(&args);
+        assert_eq!(request.domain, "example.com");
+        assert_eq!(request.timezone.as_deref(), Some("UTC"));
+        assert_eq!(request.public, Some(true));
+    }
+
+    #[test]
+    fn build_update_site_request_respects_options() {
+        let args = SiteUpdateArgs {
+            site: "example.com".into(),
+            timezone: Some("Europe/Berlin".into()),
+            public: Some(false),
+            main_site: Some(true),
+        };
+        let (site_id, request) = build_update_site_request(&args);
+        assert_eq!(site_id, "example.com");
+        assert_eq!(request.timezone.as_deref(), Some("Europe/Berlin"));
+        assert_eq!(request.public, Some(false));
+        assert_eq!(request.main_site, Some(true));
+    }
+
+    #[test]
+    fn build_reset_site_request_handles_optional_date() {
+        let args = SiteResetArgs {
+            site: "example.com".into(),
+            date: Some("2024-01-01".into()),
+        };
+        let (site_id, request) = build_reset_site_request(&args);
+        assert_eq!(site_id, "example.com");
+        assert_eq!(request.date.as_deref(), Some("2024-01-01"));
+    }
 }
 
 #[async_trait]
@@ -1241,6 +1509,44 @@ impl crate::queue::JobExecutor for PlausibleExecutor {
                     .await
                     .map_err(|err| WorkerError::Execution(err.to_string()))?;
                 Ok(JobResponse::StatsBreakdown(result))
+            }
+            JobKind::SiteCreate { request } => {
+                let site = self
+                    .client
+                    .create_site(&request)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteCreated(site))
+            }
+            JobKind::SiteUpdate { site_id, request } => {
+                let site = self
+                    .client
+                    .update_site(&site_id, &request)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteUpdated(site))
+            }
+            JobKind::SiteReset { site_id, request } => {
+                self.client
+                    .reset_site_stats(&site_id, &request)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteReset)
+            }
+            JobKind::SiteDelete { site_id } => {
+                self.client
+                    .delete_site(&site_id)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteDeleted)
+            }
+            JobKind::StatsRealtime { site_id } => {
+                let realtime = self
+                    .client
+                    .stats_realtime_visitors(&site_id)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsRealtime(realtime))
             }
             JobKind::EventSend { event } => {
                 self.client

@@ -7,8 +7,8 @@
 - Expose machine-readable JSON outputs and human-readable table narratives.
 
 ## Status Snapshot — 2025-10-29
-- ✅ Implemented: account store (file-backed) with CRUD, Plausible client (sites list, stats aggregate/timeseries/breakdown, events send), rate limiter with hourly ledger, queue + telemetry + inspect/drain snapshotting, CLI commands (`status`, `sites list`, `stats aggregate/timeseries/breakdown`, `events template/send/import`, `accounts` subcommands), documentation set, CI pipeline.
-- ⏳ In progress: extend Plausible client (sites CRUD/reset/delete, stats realtime, advanced events batching), integration tests & CLI snapshots, daily budget overrides, secure keyring/OS credential fallback, queue retry/backoff controls.
+- ✅ Implemented: account store (file-backed) with CRUD, Plausible client (sites list/create/update/reset/delete, stats aggregate/timeseries/breakdown/realtime, events send), rate limiter with hourly ledger, queue + telemetry + inspect/drain snapshotting, CLI commands (`status`, `sites list/create/update/reset/delete`, `stats aggregate/timeseries/breakdown/realtime`, `events template/send/import`, `queue inspect/drain`, `accounts` subcommands), documentation set, CI pipeline.
+- ⏳ In progress: integration tests & CLI snapshots, daily budget overrides, secure keyring/OS credential fallback, queue retry/backoff controls, advanced telemetry export.
 - 🚀 Pending release tasks: distribution automation (GitHub releases, Homebrew tap), versioning, `plausible doctor`, TDD expansion before v1 tag.
 
 ## API Surface Summary
@@ -46,16 +46,16 @@
 
 ### `plausible sites`
 - ✅ `list` – summarizes domains, visibility status, timezone (wired through queue + Plausible client).
-- ⏳ `create` – accept domain, timezone, optional public flag.
-- ⏳ `update` – patch properties via key-value flags.
-- ⏳ `reset` – trigger stats reset with date range confirmation.
-- ⏳ `delete` – queued destructive call requiring confirmation.
+- ✅ `create` – accept domain, timezone, optional public flag.
+- ✅ `update` – patch properties via key-value flags (`--timezone`, `--public`, `--main-site`).
+- ✅ `reset` – trigger stats reset with optional date range confirmation.
+- ✅ `delete` – queued destructive call requiring `--force` or interactive confirmation.
 
 ### `plausible stats`
 - ✅ `aggregate` – returns KPI metrics; supports `--metric` repeatable flags.
 - ✅ `timeseries` – emits chronologically sorted rows; optional `--json` or `--csv`.
 - ✅ `breakdown` – slices by dimensions with pagination; handles `--dimension` values.
-- ⏳ `realtime` – fetch visitors currently on site.
+- ✅ `realtime` – fetch visitors currently on site and prints visitors/pageviews/bounce rate.
 - Shared flags: `--site`, `--period|--date`, `--filters`, `--props`, `--format`.
 
 ### `plausible events`
