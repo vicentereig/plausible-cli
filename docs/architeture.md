@@ -7,9 +7,9 @@
 - Expose machine-readable JSON outputs and human-readable table narratives.
 
 ## Status Snapshot — 2025-10-29
-- ✅ Implemented: account store (file-backed) with CRUD, Plausible client (sites list/create/update/reset/delete, stats aggregate/timeseries/breakdown/realtime, events send), rate limiter with hourly ledger, queue + telemetry + inspect/drain snapshotting, CLI commands (`status`, `sites list/create/update/reset/delete`, `stats aggregate/timeseries/breakdown/realtime`, `events template/send/import`, `queue inspect/drain`, `accounts` subcommands), documentation set, CI pipeline.
-- ⏳ In progress: integration tests & CLI snapshots, daily budget overrides, secure keyring/OS credential fallback, queue retry/backoff controls, advanced telemetry export.
-- 🚀 Pending release tasks: distribution automation (GitHub releases, Homebrew tap), versioning, `plausible doctor`, TDD expansion before v1 tag.
+- ✅ Implemented: account store (keyring-first with CRUD), Plausible client (sites list/create/update/reset/delete, stats aggregate/timeseries/breakdown/realtime, events send), rate limiter with hourly + daily ledgers, queue + retry-aware telemetry + inspect/drain snapshotting, CLI commands (`status`, `sites list/create/update/reset/delete`, `stats aggregate/timeseries/breakdown/realtime`, `events template/send/import`, `queue inspect/drain`, `accounts` subcommands + budgets), documentation set, CI pipeline, and CLI snapshot harness.
+- ⏳ In progress: integration against live Plausible sandbox, expanded HTTP mocks for destructive operations, advanced telemetry export.
+- 🚀 Release pipeline staged: GitHub tag workflow builds macOS/Linux archives, Homebrew formula template & README install guidance in place; first tagged release and changelog preparation remain.
 
 ## API Surface Summary
 
@@ -43,6 +43,7 @@
 - `use` – set default account, updates config.
 - `remove` – delete account; optional `--purge-usage`.
 - `export` – print machine-readable account metadata sans secrets for automation.
+- `budget` – configure or clear per-account daily request ceilings.
 
 ### `plausible sites`
 - ✅ `list` – summarizes domains, visibility status, timezone (wired through queue + Plausible client).
@@ -65,7 +66,7 @@
 
 ### `plausible queue`
 - ✅ `drain` – wait until the background worker finishes all pending jobs.
-- ✅ `inspect` – display pending/in-flight jobs with timestamps (JSON/table).
+- ✅ `inspect` – display pending/in-flight jobs with retry counts, next retry timestamps, and last errors (JSON/table).
 
 ### `plausible status`
 - Display current account, API health, queued job counts, remaining hourly/daily budget, last reset timestamp.
@@ -124,6 +125,7 @@ sequenceDiagram
 - Token bucket capacity can be tuned per account; draining resets at top of hour.
 - Daily ledger resets on local midnight; `plausible status --reset-usage` manually clears counters.
 - Worker tracks `RetryAfter` headers, applies exponential backoff (base 2, capped 60s).
+- CLI exposes `plausible accounts budget --alias ... --daily ...` to tune daily quotas that feed into the limiter on startup.
 - Implementation note: daily override plumbing is pending; current build mirrors hourly quota for daily limits.
 
 ## Multi-Account Handling
@@ -182,6 +184,7 @@ sequenceDiagram
 ## Diagnostics & Tooling
 - `plausible debug http` captures last N requests/responses for troubleshooting.
 - `plausible doctor` checks config, network reachability, API health, and warns about outdated Rust toolchain.
+- Queue telemetry broadcasts expose retry counts and next retry timestamps for `status`/`queue inspect` consumers.
 
 ## Future Enhancements
 - Websocket support if Plausible exposes streaming.

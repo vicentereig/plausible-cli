@@ -4,11 +4,12 @@
 Deliver an ergonomic CLI that surfaces Plausible Analytics capabilities to humans and LLMs, while respecting rate limits, juggling multiple accounts, and enabling queued API execution.
 
 ## Current Status — 2025-10-29
-- ✅ Foundations in place: repo scaffolding, account store (file-backed), Plausible client (sites list/create/update/reset/delete, stats aggregate/timeseries/breakdown/realtime, events send), rate limiter scaffold, queue/worker with inspect/drain, CLI surface (`status`, `sites list/create/update/reset/delete`, `stats aggregate/timeseries/breakdown/realtime`, `events template/send/import`, `queue inspect/drain`, `accounts` CRUD), docs/LLM artefacts, CI wiring (latest on `main` @ 37774b9).
-- ⏳ Features to extend: queue retry/backoff controls, daily budget configurability, secure keyring fallback, richer telemetry/export surfaces.
-- 🔬 Test gaps: full CLI integration coverage via `assert_cmd` + JSON snapshots, expanded HTTP mocks (sites destructive actions, realtime edge cases), backpressure + large import cases, keyring mock coverage.
-- 🚀 Distribution polish pending: GitHub release workflow, `cargo install` docs, Homebrew tap automation, tagged release + changelog.
-- 🧭 Next sprint focus: persistence polish (daily budget + keyring), queue resilience, and end-to-end CLI tests before release packaging.
+- ✅ Foundations in place: repo scaffolding, account store (keyring-first with file fallback), Plausible client (sites list/create/update/reset/delete, stats aggregate/timeseries/breakdown/realtime, events send), rate limiter with daily budget support, queue/worker with telemetry + inspect/drain, CLI surface (`status`, `sites list/create/update/reset/delete`, `stats aggregate/timeseries/breakdown/realtime`, `events template/send/import`, `queue inspect/drain`, `accounts` CRUD/budget), docs/LLM artefacts, CI wiring (latest on `main` @ c752f48).
+- ✅ Queue resilience landed: exponential backoff, retry-aware telemetry, and human/JSON queue views.
+- ✅ Integration coverage via `assert_cmd` + `insta` snapshots (accounts, queue, events flows).
+- ⏳ Remaining feature hardening: richer HTTP client coverage (sites CRUD live tests, events POST), extended telemetry export, configurable retry policies per intent.
+- 🚀 Distribution pipeline staged: release workflow publishes tagged binaries, Homebrew formula template, README install instructions. First tagged release + changelog still pending.
+- 🧭 Current focus: round out HTTP contract tests, prep release artefacts, and close documentation gaps before cutting `v0.1.0`.
 
 ## Release Scope
 - Sites, Stats, Events API coverage.
@@ -88,7 +89,7 @@ gantt
 - ✅ Queue `inspect/drain`.
 - ✅ Status (reports account, limits, queue stats, API health).
 - ✅ Formatters: tables (human), JSON (machine).
-- ⏳ Snapshot tests with `insta` or `similar`.
+- ✅ Snapshot tests with `insta` and `assert_cmd` harness.
 
 ### 7. Documentation & Help System
 - ✅ README + `llms-full.txt` generated from doc templates (manual sync script pending).
@@ -100,7 +101,7 @@ gantt
 - ⏳ Integration tests hitting Plausible sandbox via mocked responses.
 - ⏳ Smoke tests with real API key (manual pre-release checklist).
 - ⏳ Version tagging scheme (SemVer) and release notes template.
-- ⏳ Packaging: `cargo install`, GitHub release, optional Homebrew tap.
+- ✅ Packaging hooks: GitHub release workflow (macOS + Linux archives), README install guidance, Homebrew formula template.
 
 ## Design Patterns & Conventions
 - Command Pattern: CLI commands convert to `Intent` jobs.
@@ -147,18 +148,12 @@ gantt
 - ⏳ Post-release checklist: publish crate or instructions, Homebrew tap update.
 
 ## Next Implementation Priorities (TDD-First)
-1. **Sites CRUD & stats realtime**  
-   - Red tests: HTTP mocks for site create/update/reset/delete and realtime visitors; CLI integration snapshots (table + JSON).  
-   - Green: extend client endpoints, queue intents, confirmation prompts, output renderers.
-2. **Rate limit daily budget & keyring integration**  
-   - Red tests: ledger persistence with configurable daily caps, platform keyring mock verifying fallback logic.  
-   - Green: configuration plumbing, CLI flags/environment overrides, migration script for existing users.
-3. **CLI integration & snapshot test harness**  
-   - Red tests: `assert_cmd` coverage for happy-path commands, JSON/table snapshot assertions, rate-limit exhaustion scenarios.  
-   - Green: add fixture helpers, wire into CI, document how to refresh snapshots.
-4. **Queue resilience & telemetry**  
-   - Red tests: retry/backoff semantics, failure reporting, queue status metrics export.  
-   - Green: implement retry policy, expose metrics in `status` and `queue inspect` output.
-5. **Distribution pipeline**  
-   - Red tests: check GitHub workflow via `cargo xtask` smoke (or script).  
-   - Green: publish workflow, Homebrew tap formula generation, README install section refinements.
+1. **HTTP client contract coverage**  
+   - Red tests: extend `httpmock` suites for sites create/update/delete/reset and events POST success/error paths.  
+   - Green: harden client conversions, ensure queue intents propagate structured errors, add regression fixtures.
+2. **Release readiness**  
+   - Red tests: smoke run against Plausible sandbox ahead of `v0.1.0`, scripted changelog validation.  
+   - Green: document release checklist, wire changelog generation, finalise Homebrew formula (version + checksum) in workflow.
+3. **Observability & docs polish**  
+   - Red tests: snapshot `plausible status --output json` after queued retries to ensure telemetry reflects backoff metadata.  
+   - Green: expose retry counts in `status`, expand LLM guide with queue/backoff guidance, cross-link human install docs.

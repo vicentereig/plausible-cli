@@ -3,6 +3,10 @@ name = "plausible-cli"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "plausible"
+path = "src/main.rs"
+
 [dependencies]
 directories = "5"
 thiserror = "1"

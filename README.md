@@ -33,7 +33,9 @@ plausible accounts use --alias personal
 ```
 
 Accounts are stored under `~/.config/plausible-cli/` with secrets held in a
-per-account key file.
+per-account key file when the OS keyring is unavailable. On macOS/Linux the CLI
+attempts to store credentials in the system keychain by default; you can opt out
+via `PLAUSIBLE_CLI_DISABLE_KEYRING=1` for ephemeral or CI environments.
 
 ## Usage Examples
 
@@ -54,6 +56,33 @@ plausible stats aggregate \
   --output json
 ```
 
+Request a daily timeseries of visitors for the same site:
+
+```bash
+plausible stats timeseries \
+  --site example.com \
+  --metric visitors \
+  --period 7d \
+  --output json
+```
+
+Slice traffic by referrer with sorting and pagination:
+
+```bash
+plausible stats breakdown \
+  --site example.com \
+  --property visit:source \
+  --metric visitors \
+  --sort visitors:desc \
+  --output json
+```
+
+Check realtime visitors currently online:
+
+```bash
+plausible stats realtime --site example.com --output json
+```
+
 Inspect the remaining API budget and next reset windows:
 
 ```bash
@@ -65,6 +94,14 @@ Generate a sample custom event payload:
 
 ```bash
 plausible events template
+plausible events template --output json
+```
+
+Inspect the background queue (helpful when scripting bursts of API calls):
+
+```bash
+plausible queue inspect --output json
+plausible queue drain   # block until all jobs finish
 ```
 
 ## Multi-Account Workflow
@@ -72,6 +109,8 @@ plausible events template
 - `plausible accounts list` – show all configured aliases (with default marker).
 - `plausible accounts export` – print non-secret metadata (table) or
   `--json` for machine consumption.
+- `plausible accounts budget --alias <alias> [--daily <limit>|--clear]` – set or
+  clear a per-account daily request ceiling (defaults to hourly quota).
 - Use `--account <alias>` on any command to override the default.
 
 ## Machine-Friendly Mode
@@ -85,6 +124,18 @@ LLM.
 - `docs/architeture.md` – architecture overview and diagrams.
 - `docs/000-v1-plan.md` – roadmap, milestones, and testing strategy.
 - `docs/llms-full.txt` – LLM-oriented reference and prompt snippets.
+
+## Distribution
+
+- **GitHub Releases** – Tags matching `v*` publish macOS and Linux archives in
+  [`releases/`](https://github.com/vicentereig/plausible-cli/releases). Download, extract, and copy the `plausible` binary onto your `$PATH`.
+- **Cargo install** – `cargo install plausible-cli --git https://github.com/vicentereig/plausible-cli.git --locked`
+- **Homebrew (tap)** – After the first tagged release:
+  ```bash
+  brew tap vicentereig/plausible-cli
+  brew install plausible
+  ```
+  The formula used by the tap lives in `homebrew/Formula/plausible.rb` and is updated automatically during the release workflow.
 
 ## Testing
 

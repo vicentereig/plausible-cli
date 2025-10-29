@@ -83,9 +83,30 @@ Use `--account <alias>` on any downstream command to override the default.
   }
   ```
 
+### `plausible stats timeseries`
+- Returns chronologically ordered rows (respecting `--interval`).
+- Same flags as `aggregate`; output is an array of objects with keys like `date`, `visitors`, `pageviews`.
+
+### `plausible stats breakdown`
+- Breaks metrics by a property (`event:page`, `visit:source`, etc.).
+- Supports pagination via `--limit`/`--page` and sorting via `--sort <metric:direction>`.
+
+### `plausible stats realtime`
+- Returns current visitor counts and optional metrics (`pageviews`, `bounce_rate`, `visit_duration`).
+- Requires `--site <site_id>`; output schema:
+  ```jsonc
+  {
+    "visitors": number,
+    "pageviews": number|null,
+    "bounce_rate": number|null,
+    "visit_duration": number|null
+  }
+  ```
+
 ### `plausible events template`
 - Emits a canonical custom-event payload for reference.
 - Use as a starting point for constructing POST bodies.
+- Requires an account context (ensure a default alias is set or pass `--account`).
 
 ### `plausible accounts ...`
 - `list [--output json]`
@@ -93,6 +114,11 @@ Use `--account <alias>` on any downstream command to override the default.
 - `use --alias <alias>`
 - `remove --alias <alias>`
 - `export [--json]`
+- `budget --alias <alias> [--daily <limit>|--clear]`
+
+### `plausible queue ...`
+- `inspect [--output json]` – surfaces pending jobs, retry counts, next retry timestamps, and last errors.
+- `drain` – block until the background worker finishes all intents; useful after enqueuing a batch.
 
 ## Automation Patterns
 
@@ -136,4 +162,4 @@ plausible sites list --output json
 - Never echo API keys in transcripts; rely on `accounts add`.
 - Retry with exponential backoff if the worker reports HTTP 429; the internal rate limiter will queue subsequent jobs safely.
 - Use `--output json` when instructing an LLM to parse output programmatically; fall back to human-readable mode for operators.
-
+- Inspect `queue inspect --output json` to determine retry state (`attempt`, `max_retries`, `next_retry_at`) before issuing follow-up commands.

@@ -4,7 +4,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 fn command(temp: &TempDir) -> Command {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("plausible-cli"));
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("plausible"));
     cmd.env("HOME", temp.path())
         .env("PLAUSIBLE_CLI_DISABLE_KEYRING", "1")
         .env_remove("XDG_CONFIG_HOME")
@@ -43,7 +43,14 @@ fn accounts_list_json_after_add() {
         .success();
 
     command(&temp)
-        .args(["accounts", "add", "--alias", "backup", "--api-key", "key-backup"])
+        .args([
+            "accounts",
+            "add",
+            "--alias",
+            "backup",
+            "--api-key",
+            "key-backup",
+        ])
         .assert()
         .success();
 
