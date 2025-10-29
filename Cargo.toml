@@ -1,7 +1,16 @@
 [package]
 name = "plausible-cli"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
+description = "Command-line interface for Plausible Analytics with rate-limit aware queueing and multi-account support"
+license = "MIT"
+repository = "https://github.com/vicentereig/plausible-cli"
+homepage = "https://github.com/vicentereig/plausible-cli"
+documentation = "https://github.com/vicentereig/plausible-cli/blob/main/docs/llms-full.txt"
+readme = "README.md"
+authors = ["Vicente Reig Rincon de Arellano <hey@vicente.services>"]
+keywords = ["analytics", "plausible", "cli", "automation", "http-client"]
+categories = ["command-line-utilities", "web-programming::http-client"]
 
 [[bin]]
 name = "plausible"

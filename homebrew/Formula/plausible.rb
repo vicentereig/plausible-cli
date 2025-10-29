@@ -1,10 +1,10 @@
 class Plausible < Formula
   desc "Automate Plausible Analytics from the CLI"
   homepage "https://github.com/vicentereig/plausible-cli"
-  version "__VERSION__"
+  version "1.0.0"
   license "MIT"
-  url "https://github.com/vicentereig/plausible-cli/archive/refs/tags/__VERSION__.tar.gz"
-  sha256 "__SHA256__"
+  url "https://github.com/vicentereig/plausible-cli/archive/refs/tags/v1.0.0.tar.gz"
+  sha256 "TO_BE_FILLED"
   head "https://github.com/vicentereig/plausible-cli.git", branch: "main"
 
   depends_on "rust" => :build
