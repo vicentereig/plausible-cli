@@ -6,16 +6,19 @@ use crate::{
     config::accounts::{
         AccountExport, AccountProfile, AccountRecord, AccountStore, AccountSummary,
     },
-    queue::{JobKind, JobRequest, JobResponse, Worker, WorkerError},
+    queue::{JobKind, JobRequest, JobResponse, QueueJobState, QueueSnapshot, Worker, WorkerError},
     rate_limit::{RateLimitConfig, RateLimiter},
     Error,
 };
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::fs;
+use std::io::{self, Read};
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tabled::{Table, Tabled};
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::config::ConfigPaths;
 #[derive(Parser, Debug)]
@@ -56,6 +59,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: EventsCommand,
     },
+    /// Inspect and control the background queue.
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
+    },
     /// Manage stored Plausible accounts.
     Accounts {
         #[command(subcommand)]
@@ -83,6 +91,18 @@ pub enum StatsCommand {
 pub enum EventsCommand {
     /// Print an example events payload.
     Template,
+    /// Send a single custom event.
+    Send(EventSendArgs),
+    /// Import newline-delimited events.
+    Import(EventImportArgs),
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum QueueCommand {
+    /// Show pending and in-flight jobs.
+    Inspect,
+    /// Block until the queue is empty.
+    Drain,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -235,6 +255,38 @@ pub struct StatsBreakdownArgs {
     pub include: Option<String>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct EventSendArgs {
+    /// Provide a JSON string payload inline.
+    #[arg(long)]
+    pub data: Option<String>,
+    /// Path to a file containing JSON payload.
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+    /// Read payload from STDIN (JSON).
+    #[arg(long)]
+    pub stdin: bool,
+    /// Override the `domain` field in the payload.
+    #[arg(long)]
+    pub domain: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct EventImportArgs {
+    /// Path to a newline-delimited JSON file.
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+    /// Read newline-delimited JSON from STDIN.
+    #[arg(long)]
+    pub stdin: bool,
+    /// Print summary without sending to Plausible.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Override the `domain` field for each event.
+    #[arg(long)]
+    pub domain: Option<String>,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum, Default)]
 pub enum OutputFormat {
     #[default]
@@ -341,11 +393,105 @@ pub async fn execute(cli: Cli) -> Result<(), Error> {
                 render_breakdown(&result, cli.output)?;
             }
         }
-        Commands::Events {
-            command: EventsCommand::Template,
-        } => {
-            render_event_template(cli.output)?;
-        }
+        Commands::Events { command } => match command {
+            EventsCommand::Template => {
+                render_event_template(cli.output)?;
+            }
+            EventsCommand::Send(args) => {
+                let event = load_event_payload(args)?;
+                let ticket = queue
+                    .submit(
+                        JobRequest {
+                            account: account_alias.clone(),
+                            kind: JobKind::EventSend { event },
+                        },
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                    .await?;
+                let response = ticket.await_result().await?;
+                match response {
+                    JobResponse::EventAck | JobResponse::Acknowledged => {
+                        println!("Event dispatched to Plausible.");
+                    }
+                    JobResponse::EventsProcessed { processed } => {
+                        println!("Processed batch containing {processed} events.");
+                    }
+                    JobResponse::Custom(value) => {
+                        println!("{}", serde_json::to_string_pretty(&value)?);
+                    }
+                    other => {
+                        println!("Event response: {:?}", other);
+                    }
+                }
+            }
+            EventsCommand::Import(args) => {
+                let events = load_import_payload(args)?;
+                if args.dry_run {
+                    let count = events.len();
+                    match cli.output {
+                        OutputFormat::Human => {
+                            println!("Dry run: would import {count} events.");
+                        }
+                        OutputFormat::Json => {
+                            let value = serde_json::json!({
+                                "dry_run": true,
+                                "count": count,
+                            });
+                            println!("{}", serde_json::to_string_pretty(&value)?);
+                        }
+                    }
+                } else {
+                    let count = events.len();
+                    let weight_u32 = u32::try_from(count).map_err(|_| {
+                        Error::InvalidInput("too many events for single import batch".into())
+                    })?;
+                    let ticket = queue
+                        .submit(
+                            JobRequest {
+                                account: account_alias.clone(),
+                                kind: JobKind::EventsImport { events },
+                            },
+                            NonZeroU32::new(weight_u32).unwrap(),
+                        )
+                        .await?;
+                    let response = ticket.await_result().await?;
+                    match response {
+                        JobResponse::EventsProcessed { processed } => match cli.output {
+                            OutputFormat::Human => {
+                                println!("Imported {processed} events.");
+                            }
+                            OutputFormat::Json => {
+                                let value = serde_json::json!({ "processed": processed });
+                                println!("{}", serde_json::to_string_pretty(&value)?);
+                            }
+                        },
+                        JobResponse::EventAck | JobResponse::Acknowledged => {
+                            println!("Import completed.");
+                        }
+                        JobResponse::Custom(value) => {
+                            println!("{}", serde_json::to_string_pretty(&value)?);
+                        }
+                        other => println!("Import response: {:?}", other),
+                    }
+                }
+            }
+        },
+        Commands::Queue { command } => match command {
+            QueueCommand::Inspect => {
+                let snapshot = queue.snapshot().await;
+                render_queue_snapshot(&snapshot, cli.output)?;
+            }
+            QueueCommand::Drain => {
+                queue.wait_idle().await;
+                match cli.output {
+                    OutputFormat::Human => println!("Queue drained."),
+                    OutputFormat::Json => {
+                        let value = serde_json::json!({ "drained": true });
+                        println!("{}", serde_json::to_string_pretty(&value)?);
+                    }
+                }
+            }
+        },
         Commands::Accounts { .. } => unreachable!(),
     }
 
@@ -420,6 +566,98 @@ fn build_breakdown_query(args: &StatsBreakdownArgs) -> BreakdownQuery {
         limit: args.limit,
         page: args.page,
         include: args.include.clone(),
+    }
+}
+
+fn load_event_payload(args: &EventSendArgs) -> Result<serde_json::Value, Error> {
+    let sources = args.data.is_some() as u8 + args.file.is_some() as u8 + args.stdin as u8;
+    if sources == 0 {
+        return Err(Error::InvalidInput(
+            "provide one of --data, --file, or --stdin for events send".into(),
+        ));
+    }
+    if sources > 1 {
+        return Err(Error::InvalidInput(
+            "choose only one of --data, --file, or --stdin for events send".into(),
+        ));
+    }
+    let raw = if let Some(data) = &args.data {
+        data.clone()
+    } else if let Some(path) = &args.file {
+        fs::read_to_string(path)?
+    } else {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        buf
+    };
+    parse_event_json(&raw, &args.domain)
+}
+
+fn load_import_payload(args: &EventImportArgs) -> Result<Vec<serde_json::Value>, Error> {
+    let sources = args.file.is_some() as u8 + args.stdin as u8;
+    if sources == 0 {
+        return Err(Error::InvalidInput(
+            "provide --file or --stdin for events import".into(),
+        ));
+    }
+    if sources > 1 {
+        return Err(Error::InvalidInput(
+            "choose either --file or --stdin for events import".into(),
+        ));
+    }
+    let raw = if let Some(path) = &args.file {
+        fs::read_to_string(path)?
+    } else {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        buf
+    };
+    parse_ndjson(&raw, &args.domain)
+}
+
+fn parse_event_json(contents: &str, domain: &Option<String>) -> Result<serde_json::Value, Error> {
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidInput("event payload is empty".into()));
+    }
+    let mut value: serde_json::Value = serde_json::from_str(trimmed)?;
+    if !value.is_object() {
+        return Err(Error::InvalidInput(
+            "event payload must be a JSON object".into(),
+        ));
+    }
+    apply_domain_override(&mut value, domain);
+    Ok(value)
+}
+
+fn parse_ndjson(contents: &str, domain: &Option<String>) -> Result<Vec<serde_json::Value>, Error> {
+    let mut events = Vec::new();
+    for (idx, line) in contents.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut value: serde_json::Value = serde_json::from_str(trimmed).map_err(|err| {
+            Error::InvalidInput(format!("failed to parse line {}: {}", idx + 1, err))
+        })?;
+        if !value.is_object() {
+            return Err(Error::InvalidInput(format!(
+                "line {} must be a JSON object",
+                idx + 1
+            )));
+        }
+        apply_domain_override(&mut value, domain);
+        events.push(value);
+    }
+    if events.is_empty() {
+        return Err(Error::InvalidInput("no events found in input".into()));
+    }
+    Ok(events)
+}
+
+fn apply_domain_override(value: &mut serde_json::Value, domain: &Option<String>) {
+    if let (Some(domain), serde_json::Value::Object(map)) = (domain, value) {
+        map.insert("domain".into(), serde_json::Value::String(domain.clone()));
     }
 }
 
@@ -509,10 +747,7 @@ fn render_aggregate(
     Ok(())
 }
 
-fn render_timeseries(
-    response: &TimeseriesResponse,
-    format: OutputFormat,
-) -> Result<(), Error> {
+fn render_timeseries(response: &TimeseriesResponse, format: OutputFormat) -> Result<(), Error> {
     match format {
         OutputFormat::Human => {
             let rows: Vec<_> = response.results.iter().map(TimeseriesRow::from).collect();
@@ -523,10 +758,7 @@ fn render_timeseries(
                 println!("{}", table);
             }
             if !response.totals.is_empty() {
-                println!(
-                    "Totals: {}",
-                    format_metrics(&response.totals, &[])
-                );
+                println!("Totals: {}", format_metrics(&response.totals, &[]));
             }
         }
         OutputFormat::Json => {
@@ -536,10 +768,7 @@ fn render_timeseries(
     Ok(())
 }
 
-fn render_breakdown(
-    response: &BreakdownResponse,
-    format: OutputFormat,
-) -> Result<(), Error> {
+fn render_breakdown(response: &BreakdownResponse, format: OutputFormat) -> Result<(), Error> {
     match format {
         OutputFormat::Human => {
             let rows: Vec<_> = response.results.iter().map(BreakdownRow::from).collect();
@@ -588,6 +817,40 @@ fn render_event_template(format: OutputFormat) -> Result<(), Error> {
         }
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&sample)?);
+        }
+    }
+    Ok(())
+}
+
+fn render_queue_snapshot(snapshot: &[QueueSnapshot], format: OutputFormat) -> Result<(), Error> {
+    match format {
+        OutputFormat::Human => {
+            if snapshot.is_empty() {
+                println!("Queue is empty.");
+            } else {
+                let rows: Vec<_> = snapshot.iter().map(QueueRow::from).collect();
+                let table = Table::new(rows).to_string();
+                println!("{}", table);
+            }
+        }
+        OutputFormat::Json => {
+            let payload: Vec<_> = snapshot
+                .iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "id": entry.id,
+                        "account": entry.account,
+                        "description": entry.description,
+                        "state": match entry.state {
+                            QueueJobState::Pending => "pending",
+                            QueueJobState::InFlight => "in_flight",
+                        },
+                        "enqueued_at": format_timestamp(&entry.enqueued_at),
+                        "started_at": entry.started_at.as_ref().map(format_timestamp),
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&payload)?);
         }
     }
     Ok(())
@@ -736,10 +999,37 @@ impl From<&serde_json::Map<String, serde_json::Value>> for BreakdownRow {
     }
 }
 
-fn format_metrics(
-    map: &serde_json::Map<String, serde_json::Value>,
-    skip: &[&str],
-) -> String {
+#[derive(Tabled)]
+struct QueueRow {
+    id: u64,
+    account: String,
+    description: String,
+    state: String,
+    enqueued_at: String,
+    started_at: String,
+}
+
+impl From<&QueueSnapshot> for QueueRow {
+    fn from(entry: &QueueSnapshot) -> Self {
+        Self {
+            id: entry.id,
+            account: entry.account.clone(),
+            description: entry.description.clone(),
+            state: match entry.state {
+                QueueJobState::Pending => "pending".into(),
+                QueueJobState::InFlight => "in-flight".into(),
+            },
+            enqueued_at: format_timestamp(&entry.enqueued_at),
+            started_at: entry
+                .started_at
+                .as_ref()
+                .map(format_timestamp)
+                .unwrap_or_else(|| "n/a".into()),
+        }
+    }
+}
+
+fn format_metrics(map: &serde_json::Map<String, serde_json::Value>, skip: &[&str]) -> String {
     map.iter()
         .filter(|(key, _)| !skip.iter().any(|skip_key| *skip_key == key.as_str()))
         .map(|(key, value)| format!("{key}={}", format_value(value)))
@@ -755,6 +1045,12 @@ fn format_value(value: &serde_json::Value) -> String {
         serde_json::Value::String(s) => s.clone(),
         other => serde_json::to_string(other).unwrap_or_else(|_| "<unserializable>".into()),
     }
+}
+
+fn format_timestamp(timestamp: &OffsetDateTime) -> String {
+    timestamp
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| timestamp.to_string())
 }
 
 #[derive(Tabled)]
@@ -877,6 +1173,37 @@ mod tests {
         assert_eq!(query.include.as_deref(), Some("previous"));
         assert_eq!(query.limit, Some(25));
     }
+
+    #[test]
+    fn parse_event_json_applies_domain_override() {
+        let domain = Some(String::from("example.com"));
+        let value = parse_event_json(r#"{"name":"Signup"}"#, &domain).expect("parse");
+        assert_eq!(
+            value.get("domain").and_then(|v| v.as_str()),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn parse_ndjson_parses_multiple_events() {
+        let domain = None;
+        let events = parse_ndjson("{\"name\":\"Signup\"}\n{\"name\":\"Upgrade\"}\n", &domain)
+            .expect("ndjson");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].get("name").and_then(|v| v.as_str()),
+            Some("Signup")
+        );
+    }
+
+    #[test]
+    fn parse_ndjson_errors_when_empty() {
+        let err = parse_ndjson("\n\n", &None).expect_err("empty");
+        match err {
+            Error::InvalidInput(msg) => assert!(msg.contains("no events")),
+            _ => panic!("unexpected error"),
+        }
+    }
 }
 
 #[async_trait]
@@ -914,6 +1241,24 @@ impl crate::queue::JobExecutor for PlausibleExecutor {
                     .await
                     .map_err(|err| WorkerError::Execution(err.to_string()))?;
                 Ok(JobResponse::StatsBreakdown(result))
+            }
+            JobKind::EventSend { event } => {
+                self.client
+                    .send_event(&event)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::EventAck)
+            }
+            JobKind::EventsImport { events } => {
+                let mut processed = 0usize;
+                for event in events {
+                    self.client
+                        .send_event(&event)
+                        .await
+                        .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                    processed += 1;
+                }
+                Ok(JobResponse::EventsProcessed { processed })
             }
             JobKind::Custom { .. } => Ok(JobResponse::Acknowledged),
         }

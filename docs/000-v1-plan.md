@@ -4,11 +4,11 @@
 Deliver an ergonomic CLI that surfaces Plausible Analytics capabilities to humans and LLMs, while respecting rate limits, juggling multiple accounts, and enabling queued API execution.
 
 ## Current Status — 2025-10-29
-- ✅ Foundations in place: repo scaffolding, account store (file-backed), Plausible client (sites + stats aggregate), rate limiter scaffold, queue/worker, baseline CLI commands (`status`, `sites list`, `stats aggregate`, `events template`, `accounts` CRUD), docs/LLM artefacts, CI wiring (latest on `main` @ a38358b).
-- ⏳ Features to extend: events `send/import`, stats `timeseries` & `breakdown`, queue `inspect/drain`, additional Plausible endpoint coverage (sites CRUD, events POST), daily budget configurability, secure keyring fallback.
-- 🔬 Test gaps: integration coverage via `assert_cmd`, expanded HTTP mocks (sites CRUD, events POST), JSON snapshot assertions, rate-limit exhaustion/backpressure scenarios.
+- ✅ Foundations in place: repo scaffolding, account store (file-backed), Plausible client (sites + stats aggregate/timeseries/breakdown + events send), rate limiter scaffold, queue/worker with inspect/drain, CLI surface (`status`, `sites list`, `stats aggregate/timeseries/breakdown`, `events template/send/import`, `accounts` CRUD), docs/LLM artefacts, CI wiring (latest on `main` @ 3a2b77c).
+- ⏳ Features to extend: stats `realtime`, sites CRUD/reset/delete, queue retry/backoff controls, daily budget configurability, secure keyring fallback, telemetry export.
+- 🔬 Test gaps: full CLI integration coverage via `assert_cmd` + JSON snapshots, expanded HTTP mocks (sites CRUD, realtime), backpressure + large import cases, keyring mock coverage.
 - 🚀 Distribution polish pending: GitHub release workflow, `cargo install` docs, Homebrew tap automation, tagged release + changelog.
-- 🧭 Next sprint focus: close remaining CLI surface + persistence polish, then broaden tests before first public release.
+- 🧭 Next sprint focus: persistence polish (daily budget + keyring), extend site/event surface, then harden integration tests before release packaging.
 
 ## Release Scope
 - Sites, Stats, Events API coverage.
@@ -83,9 +83,9 @@ gantt
 
 ### 6. CLI Commands & Output
 - ✅ Sites `list`; ⏳ `create/update/reset/delete`.
-- ✅ Stats `aggregate`; ⏳ `timeseries/breakdown/realtime` with shared flags.
-- ✅ Events `template`; ⏳ `send/import`.
-- ⏳ Queue `inspect/drain`.
+- ✅ Stats `aggregate/timeseries/breakdown`; ⏳ `realtime` with shared flags.
+- ✅ Events `template/send/import`.
+- ✅ Queue `inspect/drain`.
 - ✅ Status (reports account, limits, queue stats, API health).
 - ✅ Formatters: tables (human), JSON (machine).
 - ⏳ Snapshot tests with `insta` or `similar`.
@@ -147,19 +147,18 @@ gantt
 - ⏳ Post-release checklist: publish crate or instructions, Homebrew tap update.
 
 ## Next Implementation Priorities (TDD-First)
-1. **Stats timeseries/breakdown**  
-   - Red tests: extend `client` module mocks to capture new endpoints, add CLI integration snapshots (human + JSON).  
-   - Green: implement API calls, queue intents, CLI wiring, output rendering, ensure rate-limit weights captured.
-2. **Events send/import workflows**  
-   - Red tests: event payload validation unit tests, CLI integration for `send` (stdin + flags) and `import` (NDJSON reader with `--dry-run`), worker interactions verifying queue submission.  
-   - Green: implement request builders, streaming uploads, background processing, success/failure telemetry.  
-   - Refactor: share schema templates between docs and runtime.
-3. **Queue management commands**  
-   - Red tests: queue inspection snapshots demonstrating ordering, drain command ensuring telemetry updates.  
-   - Green: introspection APIs on queue, CLI commands, optional `--json`.
-4. **Rate limit daily budget & keyring integration**  
+1. **Sites CRUD & stats realtime**  
+   - Red tests: HTTP mocks for site create/update/reset/delete and realtime visitors; CLI integration snapshots (table + JSON).  
+   - Green: extend client endpoints, queue intents, confirmation prompts, output renderers.
+2. **Rate limit daily budget & keyring integration**  
    - Red tests: ledger persistence with configurable daily caps, platform keyring mock verifying fallback logic.  
    - Green: configuration plumbing, CLI flags/environment overrides, migration script for existing users.
+3. **CLI integration & snapshot test harness**  
+   - Red tests: `assert_cmd` coverage for happy-path commands, JSON/table snapshot assertions, rate-limit exhaustion scenarios.  
+   - Green: add fixture helpers, wire into CI, document how to refresh snapshots.
+4. **Queue resilience & telemetry**  
+   - Red tests: retry/backoff semantics, failure reporting, queue status metrics export.  
+   - Green: implement retry policy, expose metrics in `status` and `queue inspect` output.
 5. **Distribution pipeline**  
    - Red tests: check GitHub workflow via `cargo xtask` smoke (or script).  
    - Green: publish workflow, Homebrew tap formula generation, README install section refinements.

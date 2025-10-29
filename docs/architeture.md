@@ -7,8 +7,8 @@
 - Expose machine-readable JSON outputs and human-readable table narratives.
 
 ## Status Snapshot — 2025-10-29
-- ✅ Implemented: account store (file-backed) with CRUD, Plausible client (sites list, stats aggregate), rate limiter with hourly ledger, queue + telemetry, baseline CLI commands (`status`, `sites list`, `stats aggregate`, `events template`, `accounts` subcommands), documentation set, CI pipeline.
-- ⏳ In progress: extend Plausible client (stats `timeseries/breakdown`, sites CRUD, events POST), enrich queue commands, implement events workflows, add integration tests & snapshot coverage, support daily budget overrides and secure keyring/OS credential fallback.
+- ✅ Implemented: account store (file-backed) with CRUD, Plausible client (sites list, stats aggregate/timeseries/breakdown, events send), rate limiter with hourly ledger, queue + telemetry + inspect/drain snapshotting, CLI commands (`status`, `sites list`, `stats aggregate/timeseries/breakdown`, `events template/send/import`, `accounts` subcommands), documentation set, CI pipeline.
+- ⏳ In progress: extend Plausible client (sites CRUD/reset/delete, stats realtime, advanced events batching), integration tests & CLI snapshots, daily budget overrides, secure keyring/OS credential fallback, queue retry/backoff controls.
 - 🚀 Pending release tasks: distribution automation (GitHub releases, Homebrew tap), versioning, `plausible doctor`, TDD expansion before v1 tag.
 
 ## API Surface Summary
@@ -53,19 +53,19 @@
 
 ### `plausible stats`
 - ✅ `aggregate` – returns KPI metrics; supports `--metric` repeatable flags.
-- ⏳ `timeseries` – emits chronologically sorted rows; optional `--json` or `--csv`.
-- ⏳ `breakdown` – slices by dimensions with pagination; handles `--dimension` values.
+- ✅ `timeseries` – emits chronologically sorted rows; optional `--json` or `--csv`.
+- ✅ `breakdown` – slices by dimensions with pagination; handles `--dimension` values.
 - ⏳ `realtime` – fetch visitors currently on site.
 - Shared flags: `--site`, `--period|--date`, `--filters`, `--props`, `--format`.
 
 ### `plausible events`
-- ⏳ `send` – post events from CLI or piped JSON.
-- ⏳ `import` – batch read newline-delimited events with optional `--dry-run`.
+- ✅ `send` – post events from CLI (`--data/--file/--stdin`) with optional domain override.
+- ✅ `import` – batch read newline-delimited events with optional `--dry-run`.
 - ✅ `template` – prints example payload for copy/paste or LLM usage.
 
 ### `plausible queue`
-- ⏳ `drain` – force worker to process queued jobs.
-- ⏳ `inspect` – display pending requests, retry counts, and ETA per job.
+- ✅ `drain` – wait until the background worker finishes all pending jobs.
+- ✅ `inspect` – display pending/in-flight jobs with timestamps (JSON/table).
 
 ### `plausible status`
 - Display current account, API health, queued job counts, remaining hourly/daily budget, last reset timestamp.

@@ -189,6 +189,34 @@ impl PlausibleClient {
         self.handle_response(response).await
     }
 
+    /// Send a custom event to Plausible.
+    pub async fn send_event(&self, event: &Value) -> Result<(), ClientError> {
+        if !event.is_object() {
+            return Err(ClientError::Validation(
+                "event payload must be a JSON object",
+            ));
+        }
+        let url = self.endpoint("api/v1/events")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(event)
+            .send()
+            .await
+            .map_err(ClientError::Http)?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("unable to read error body"));
+            Err(ClientError::Api { status, message })
+        }
+    }
+
     async fn handle_response<T: DeserializeOwned>(
         &self,
         response: Response,
@@ -545,10 +573,7 @@ mod tests {
             .await
             .expect("timeseries response");
         assert_eq!(response.results.len(), 2);
-        assert_eq!(
-            response.results[0].get("visitors"),
-            Some(&json!(10))
-        );
+        assert_eq!(response.results[0].get("visitors"), Some(&json!(10)));
         assert_eq!(
             response.totals.get("visitors").and_then(|v| v.as_i64()),
             Some(22)
@@ -593,10 +618,41 @@ mod tests {
             .await
             .expect("breakdown response");
         assert_eq!(response.results.len(), 2);
-        assert_eq!(
-            response.results[0].get("value"),
-            Some(&json!("/docs"))
-        );
+        assert_eq!(response.results[0].get("value"), Some(&json!("/docs")));
         assert_eq!(response.total_pages, Some(1));
+    }
+
+    #[tokio::test]
+    async fn send_event_posts_payload() {
+        let server = MockServer::start_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/events")
+                    .header("authorization", "Bearer event-key")
+                    .json_body(json!({
+                        "name": "Signup",
+                        "domain": "example.com"
+                    }));
+                then.status(202);
+            })
+            .await;
+
+        let client = test_client("event-key", &server);
+        let event = json!({
+            "name": "Signup",
+            "domain": "example.com"
+        });
+        client.send_event(&event).await.expect("send event");
+    }
+
+    #[tokio::test]
+    async fn send_event_rejects_non_object_payload() {
+        let server = MockServer::start_async().await;
+        let client = test_client("key", &server);
+        let event = serde_json::Value::String("not-object".into());
+        let err = client.send_event(&event).await.expect_err("validation");
+        assert!(matches!(err, ClientError::Validation(msg) if msg.contains("JSON object")));
     }
 }

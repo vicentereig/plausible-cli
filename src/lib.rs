@@ -29,6 +29,8 @@ pub enum Error {
     Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Runtime(#[from] std::io::Error),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("no default account configured; add an account or pass --account")]
     NoDefaultAccount,
 }
