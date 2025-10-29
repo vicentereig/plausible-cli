@@ -1260,7 +1260,10 @@ fn confirm_deletion(site: &str) -> Result<bool, Error> {
 
 fn format_metrics(map: &serde_json::Map<String, serde_json::Value>, skip: &[&str]) -> String {
     map.iter()
-        .filter(|(key, _)| !skip.iter().any(|skip_key| *skip_key == key.as_str()))
+        .filter(|(key, _)| {
+            let key_str = key.as_str();
+            !skip.contains(&key_str)
+        })
         .map(|(key, value)| format!("{key}={}", format_value(value)))
         .collect::<Vec<_>>()
         .join(", ")
@@ -1345,6 +1348,103 @@ struct PlausibleExecutor {
 impl PlausibleExecutor {
     fn new(client: PlausibleClient) -> Self {
         Self { client }
+    }
+}
+
+#[async_trait]
+impl crate::queue::JobExecutor for PlausibleExecutor {
+    async fn execute(&self, request: JobRequest) -> crate::queue::JobResult {
+        match request.kind {
+            JobKind::ListSites => {
+                let sites = self
+                    .client
+                    .list_sites()
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::Sites(sites))
+            }
+            JobKind::StatsAggregate { query } => {
+                let result = self
+                    .client
+                    .stats_aggregate(&query)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsAggregate(result))
+            }
+            JobKind::StatsTimeseries { query } => {
+                let result = self
+                    .client
+                    .stats_timeseries(&query)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsTimeseries(result))
+            }
+            JobKind::StatsBreakdown { query } => {
+                let result = self
+                    .client
+                    .stats_breakdown(&query)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsBreakdown(result))
+            }
+            JobKind::SiteCreate { request } => {
+                let site = self
+                    .client
+                    .create_site(&request)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteCreated(site))
+            }
+            JobKind::SiteUpdate { site_id, request } => {
+                let site = self
+                    .client
+                    .update_site(&site_id, &request)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteUpdated(site))
+            }
+            JobKind::SiteReset { site_id, request } => {
+                self.client
+                    .reset_site_stats(&site_id, &request)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteReset)
+            }
+            JobKind::SiteDelete { site_id } => {
+                self.client
+                    .delete_site(&site_id)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::SiteDeleted)
+            }
+            JobKind::StatsRealtime { site_id } => {
+                let realtime = self
+                    .client
+                    .stats_realtime_visitors(&site_id)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::StatsRealtime(realtime))
+            }
+            JobKind::EventSend { event } => {
+                self.client
+                    .send_event(&event)
+                    .await
+                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                Ok(JobResponse::EventAck)
+            }
+            JobKind::EventsImport { events } => {
+                let mut processed = 0usize;
+                for event in events {
+                    self.client
+                        .send_event(&event)
+                        .await
+                        .map_err(|err| WorkerError::Execution(err.to_string()))?;
+                    processed += 1;
+                }
+                Ok(JobResponse::EventsProcessed { processed })
+            }
+            JobKind::Custom { .. } => Ok(JobResponse::Acknowledged),
+        }
     }
 }
 
@@ -1471,102 +1571,5 @@ mod tests {
         let (site_id, request) = build_reset_site_request(&args);
         assert_eq!(site_id, "example.com");
         assert_eq!(request.date.as_deref(), Some("2024-01-01"));
-    }
-}
-
-#[async_trait]
-impl crate::queue::JobExecutor for PlausibleExecutor {
-    async fn execute(&self, request: JobRequest) -> crate::queue::JobResult {
-        match request.kind {
-            JobKind::ListSites => {
-                let sites = self
-                    .client
-                    .list_sites()
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::Sites(sites))
-            }
-            JobKind::StatsAggregate { query } => {
-                let result = self
-                    .client
-                    .stats_aggregate(&query)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::StatsAggregate(result))
-            }
-            JobKind::StatsTimeseries { query } => {
-                let result = self
-                    .client
-                    .stats_timeseries(&query)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::StatsTimeseries(result))
-            }
-            JobKind::StatsBreakdown { query } => {
-                let result = self
-                    .client
-                    .stats_breakdown(&query)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::StatsBreakdown(result))
-            }
-            JobKind::SiteCreate { request } => {
-                let site = self
-                    .client
-                    .create_site(&request)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::SiteCreated(site))
-            }
-            JobKind::SiteUpdate { site_id, request } => {
-                let site = self
-                    .client
-                    .update_site(&site_id, &request)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::SiteUpdated(site))
-            }
-            JobKind::SiteReset { site_id, request } => {
-                self.client
-                    .reset_site_stats(&site_id, &request)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::SiteReset)
-            }
-            JobKind::SiteDelete { site_id } => {
-                self.client
-                    .delete_site(&site_id)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::SiteDeleted)
-            }
-            JobKind::StatsRealtime { site_id } => {
-                let realtime = self
-                    .client
-                    .stats_realtime_visitors(&site_id)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::StatsRealtime(realtime))
-            }
-            JobKind::EventSend { event } => {
-                self.client
-                    .send_event(&event)
-                    .await
-                    .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                Ok(JobResponse::EventAck)
-            }
-            JobKind::EventsImport { events } => {
-                let mut processed = 0usize;
-                for event in events {
-                    self.client
-                        .send_event(&event)
-                        .await
-                        .map_err(|err| WorkerError::Execution(err.to_string()))?;
-                    processed += 1;
-                }
-                Ok(JobResponse::EventsProcessed { processed })
-            }
-            JobKind::Custom { .. } => Ok(JobResponse::Acknowledged),
-        }
     }
 }
