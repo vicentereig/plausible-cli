@@ -21,17 +21,27 @@ with a workflow tailored for humans and automation agents.
 
 ## Requirements
 
-- Rust 1.90 or newer (`rustup install stable` recommended).
 - A Plausible Analytics API key with access to the desired sites.
+- Rust 1.90+ only if building from source.
 
 ## Installation
 
+### Homebrew (recommended)
+
 ```bash
-# Build and install from the current workspace
-cargo install --path .
+brew tap vicentereig/tap
+brew install plausible
 ```
 
-You can also run directly with `cargo run -- <command>` while developing.
+### Cargo
+
+```bash
+cargo install plausible-cli --git https://github.com/vicentereig/plausible-cli.git --locked
+```
+
+### Binary Download
+
+Download pre-compiled binaries for macOS (arm64/amd64) and Linux (arm64/amd64) from [GitHub Releases](https://github.com/vicentereig/plausible-cli/releases).
 
 ## First-Run Setup
 
@@ -143,20 +153,7 @@ LLM.
 
 ## Distribution
 
-- **GitHub Releases** – Tags matching `v*` publish macOS and Linux archives in
-  [`releases/`](https://github.com/vicentereig/plausible-cli/releases). Download, extract, and copy the `plausible` binary onto your `$PATH`.
-- **Cargo install** – `cargo install plausible-cli --git https://github.com/vicentereig/plausible-cli.git --locked`
-- **Homebrew (tap)** – After the first tagged release:
-  ```bash
-  brew tap vicentereig/plausible-cli
-  brew install plausible
-  ```
-  The formula used by the tap lives in `homebrew/Formula/plausible.rb` and is updated automatically during the release workflow.
-  Until the dedicated tap repository is published, you can install the same formula locally:
-  ```bash
-  brew tap vicentereig/plausible-cli "$(pwd)/homebrew"
-  brew install plausible
-  ```
+Pre-compiled binaries are available for macOS (arm64/amd64) and Linux (arm64/amd64). See [Installation](#installation) for all options. The Homebrew formula at [vicentereig/homebrew-tap](https://github.com/vicentereig/homebrew-tap) is updated automatically on each release.
 
 ## Testing
 
